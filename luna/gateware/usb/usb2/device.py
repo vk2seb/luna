@@ -229,6 +229,7 @@ class USBDevice(Elaboratable):
         m.d.comb += [
             reset_sequencer.bus_busy        .eq(self.bus_busy),
 
+            reset_sequencer.reset           .eq(~self.connect),
             reset_sequencer.vbus_connected  .eq(~self.utmi.session_end),
             reset_sequencer.line_state      .eq(self.utmi.line_state),
         ]
@@ -657,7 +658,8 @@ try:
             #
             # I/O port
             #
-            self.connect   = Signal(reset=1)
+            self.connect   = Signal()
+            self.reset     = Signal()
             self.bus_reset = Signal()
 
 
@@ -668,6 +670,10 @@ try:
             regs = self.csr_bank()
             self._connect = regs.csr(1, "rw", desc="""
                 Set this bit to '1' to allow the associated USB device to connect to a host.
+            """)
+
+            self._reset = regs.csr(1, "rw", desc="""
+                Set this bit to '1' to perform manual reset of USB logic
             """)
 
             self._speed = regs.csr(2, "r", desc="""
@@ -713,6 +719,10 @@ try:
             with m.If(self._connect.w_stb):
                 m.d.usb += self._connect.r_data.eq(self._connect.w_data)
 
+            m.d.comb += self.reset.eq(self._reset.r_data)
+            with m.If(self._reset.w_stb):
+                m.d.usb += self._reset.r_data.eq(self._reset.w_data)
+ 
             # Reset-detection event.
             m.d.comb += self._reset_irq.stb.eq(self.bus_reset)
 

@@ -13,6 +13,10 @@ import logging
 from amaranth                import Elaboratable, Module
 from amaranth_soc            import wishbone
 
+import sys
+
+print(sys.path)
+
 from lambdasoc.soc.cpu       import CPUSoC
 from lambdasoc.cpu.minerva   import MinervaCPU
 from lambdasoc.periph.intc   import GenericInterruptController
@@ -262,16 +266,16 @@ class SimpleSoC(CPUSoC, Elaboratable):
             resources = peripheral.all_resources()
 
             # ... find the peripheral's resources...
-            for resource, (register_offset, register_end_offset, _local_granularity) in resources:
+            for resource_info in resources:
 
                 if self._build_bios and omit_bios_mem:
                     # If we're omitting bios resources, skip the BIOS ram/rom.
-                    if (self.ram._mem is resource) or (self.rom._mem is resource):
+                    if (self.ram._mem is resource_info.resource) or (self.rom._mem is resource_info.resource):
                         continue
 
                 # ... and extract the peripheral's range/vitals...
-                size = register_end_offset - register_offset
-                yield resource, peripheral_start + register_offset, size
+                size = resource_info.end - resource_info.start
+                yield resource_info.resource, peripheral_start + resource_info.start, size
 
 
     def build(self, name=None, build_dir="build"):

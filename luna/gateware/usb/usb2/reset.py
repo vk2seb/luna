@@ -66,6 +66,8 @@ class USBResetSequencer(Elaboratable):
     vbus_connected: Signal(), input
         Indicates that the device is connected to VBUS. When this is de-asserted, the device will
         be held in perpetual bus reset, and reset handshaking will be disabled.
+    reset: Signal(), input
+        signal from the SoC, When this is asserted, the device will be held in perpetual bus reset
     line_state: Signal(2), input
         The UTMI linestate signals; used to read the current state of the USB D+ and D- lines.
 
@@ -124,6 +126,7 @@ class USBResetSequencer(Elaboratable):
 
         self.bus_busy           = Signal()
         self.vbus_connected     = Signal()
+        self.reset              = Signal()
         self.line_state         = Signal(2)
 
         self.bus_reset          = Signal()
@@ -205,11 +208,12 @@ class USBResetSequencer(Elaboratable):
                     m.d.usb += timer.eq(0)
 
 
-                # If VBUS isn't connected, don't go through the whole reset process;
+                # If VBUS isn't connected, or SoC instructs a reset, don't go through 
+                # the whole reset process;
                 # but also consider ourselves permanently in reset. This ensures we
                 # don't progress through the reset FSM; but also ensures the device
                 # state starts fresh with each plug.
-                with m.If(~self.vbus_connected):
+                with m.If(~self.vbus_connected | self.reset):
                     m.d.usb  += timer.eq(0)
                     m.d.comb += self.bus_reset.eq(1)
 
@@ -249,7 +253,7 @@ class USBResetSequencer(Elaboratable):
                 # If VBUS isn't connected, our device/host relationship is effectively
                 # a blank state. We'll want to present our detection pull-up to the host,
                 # so we'll drop out of high speed.
-                with m.If(~self.vbus_connected):
+                with m.If(~self.vbus_connected | self.reset):
                     m.d.comb += self.bus_reset.eq(1)
                     m.next = 'IS_LOW_OR_FULL_SPEED'
 
