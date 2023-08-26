@@ -4,7 +4,7 @@
 
 TARGET  = hello_world
 
-CROSS  ?= riscv64-unknown-elf-
+CROSS  ?= riscv32-unknown-elf-
 
 CC      = $(CROSS)gcc
 OBJCOPY = $(CROSS)objcopy

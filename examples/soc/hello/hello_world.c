@@ -34,7 +34,7 @@ void uart_puts(char *str)
 void dispatch_isr(void)
 {
 	if(timer_interrupt_pending()) {
-		timer_ev_pending_write(timer_ev_pending_read());
+		timer_pending_write(timer_pending_read());
 		leds_output_write(~leds_output_read());
 	}
 }
@@ -48,7 +48,7 @@ int main(void)
 	// Set up our timer to generate LED blinkies.
 	timer_reload_write(0xA00000);
 	timer_en_write(1);
-	timer_ev_enable_write(1);
+	timer_enable_write(1);
 
 	// Enable our timer's interrupt.
 	irq_setie(1);

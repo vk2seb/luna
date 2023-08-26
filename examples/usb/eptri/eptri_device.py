@@ -11,6 +11,7 @@ import os.path
 
 from amaranth                                import Elaboratable, Module, Cat
 from amaranth.hdl.rec                        import Record
+from amaranth_stdio.serial                   import AsyncSerial
 
 from lambdasoc.periph.serial                 import AsyncSerialPeripheral
 from lambdasoc.periph.timer                  import TimerPeripheral
@@ -46,7 +47,12 @@ class EptriDeviceExample(Elaboratable):
         soc.add_ram(0x4000)
 
         # ... add a UART ...
-        self.uart = uart = AsyncSerialPeripheral(divisor=int(60e6 // 115200), pins=self.uart_pins)
+        uart_core = AsyncSerial(
+            data_bits = 8,
+            divisor   = int(60e6 // 115200),
+            pins      = self.uart_pins,
+        )
+        self.uart = uart = AsyncSerialPeripheral(core=uart_core)
         soc.add_peripheral(uart)
 
         # ... add a timer, to control our LED blinkies...

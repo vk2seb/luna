@@ -6,12 +6,12 @@ TARGET      = eptri_example
 BAUDRATE    = 115200
 SERIALPORT ?= /dev/ttyACM0
 
-CROSS  ?= riscv64-unknown-elf-
+CROSS  ?= riscv32-unknown-elf-
 
 CC      = $(CROSS)gcc
 OBJCOPY = $(CROSS)objcopy
 
-CFLAGS  = -march=rv32i -mabi=ilp32 -g -Os -Wall -Werror
+CFLAGS  = -march=rv32i -mabi=ilp32 -g -Os -Wall
 LDFLAGS = -Tsoc.ld -Triscv_standalone.ld  -nostdlib
 
 SOC = eptri_device.py
