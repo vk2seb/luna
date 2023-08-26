@@ -9,6 +9,7 @@ import logging
 import tempfile
 import argparse
 
+from amaranth.back import verilog
 from amaranth           import Elaboratable
 from amaranth._unused   import MustUse
 
@@ -150,7 +151,8 @@ def top_level_cli(fragment, *pos_args, cli_soc=None, **kwargs):
         MustUse._MustUse__silence = False
         products = platform.build(fragment,
             do_program=args.upload,
-            build_dir=build_dir
+            build_dir=build_dir,
+            debug_verilog=True,
         )
 
         logging.info(f"{'Upload' if args.upload else 'Build'} complete.")

@@ -17,7 +17,7 @@ or
 import os
 import subprocess
 
-from amaranth import Elaboratable, ClockDomain, Module, ResetSignal
+from amaranth import Elaboratable, ClockDomain, Module, ResetSignal, ClockSignal
 from amaranth.build import Resource, Subsignal, Pins, PinsN, Attrs, Clock, DiffPairs, Connector
 from amaranth.vendor.lattice_ecp5 import LatticeECP5Platform
 
@@ -54,13 +54,20 @@ class StubClockDomainGenerator(Elaboratable):
         m = Module()
 
         # Create our domains; but don't do anything else for them, for now.
+        m.domains.sync = ClockDomain()
         m.domains.usb = ClockDomain()
         m.domains.fast = ClockDomain()
+
+        # Grab our clock and global reset signals.
+        clk100 = platform.request(platform.default_clk)
+        reset  = platform.request(platform.default_rst)
 
         # Handle USB PHY resets.
         m.submodules.usb_reset = controller = PHYResetController()
         m.d.comb += [
-            ResetSignal("usb")  .eq(controller.phy_reset)
+            ResetSignal("usb").eq(controller.phy_reset),
+            ClockSignal("sync").eq(ClockSignal("usb")),
+            ClockSignal("fast").eq(ClockSignal("usb"))
         ]
 
         return m
