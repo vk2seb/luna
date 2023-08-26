@@ -19,6 +19,7 @@ from luna                         import top_level_cli
 from luna.gateware.soc            import SimpleSoC
 from luna.gateware.interface.uart import UARTTransmitterPeripheral
 
+from luna.full_devices   import USBSerialDevice
 
 class LEDPeripheral(Peripheral, Elaboratable):
     """ Example peripheral that controls the board's LEDs. """
@@ -55,91 +56,36 @@ class LEDPeripheral(Peripheral, Elaboratable):
 
         return m
 
-
-class ULPIRegisterPeripheral(Peripheral, Elaboratable):
-    """ Peripheral that provides access to a ULPI PHY, and its registers. """
-
-    def __init__(self, name="ulpi", io_resource_name="usb"):
-        super().__init__(name=name)
-        self._io_resource = io_resource_name
-
-        # Create our registers...
-        bank            = self.csr_bank()
-        self._address   = bank.csr(8, "w")
-        self._value     = bank.csr(8, "rw")
-        self._busy      = bank.csr(1, "r")
-
-        # ... and convert our register into a Wishbone peripheral.
-        self._bridge    = self.bridge(data_width=32, granularity=8, alignment=2)
-        self.bus        = self._bridge.bus
-
+class USBSerialDeviceExample(Elaboratable):
+    """ Device that acts as a 'USB-to-serial' loopback using our premade gateware. """
 
     def elaborate(self, platform):
         m = Module()
-        m.submodules.bridge = self._bridge
 
-        # Grab a connection to our ULPI PHY.
-        target_ulpi = platform.request(self._io_resource)
+        # Create our USB-to-serial converter.
+        ulpi = platform.request(platform.default_usb_connection)
+        m.submodules.usb_serial = usb_serial = \
+                USBSerialDevice(bus=ulpi, idVendor=0x16d0, idProduct=0x0f3b)
 
-        #
-        # ULPI Register Window
-        #
-        ulpi_reg_window  = ULPIRegisterWindow()
-        m.submodules  += ulpi_reg_window
-
-        # Connect up the window.
         m.d.comb += [
-            ulpi_reg_window.ulpi_data_in  .eq(target_ulpi.data.i),
-            ulpi_reg_window.ulpi_dir      .eq(target_ulpi.dir.i),
-            ulpi_reg_window.ulpi_next     .eq(target_ulpi.nxt.i),
+            # Place the streams into a loopback configuration...
+            usb_serial.tx.payload  .eq(usb_serial.rx.payload),
+            usb_serial.tx.valid    .eq(usb_serial.rx.valid),
+            usb_serial.tx.first    .eq(usb_serial.rx.first),
+            usb_serial.tx.last     .eq(usb_serial.rx.last),
+            usb_serial.rx.ready    .eq(usb_serial.tx.ready),
 
-            target_ulpi.clk               .eq(ClockSignal("usb")),
-            target_ulpi.rst               .eq(ResetSignal("usb")),
-            target_ulpi.stp               .eq(ulpi_reg_window.ulpi_stop),
-            target_ulpi.data.o            .eq(ulpi_reg_window.ulpi_data_out),
-            target_ulpi.data.oe           .eq(~target_ulpi.dir.i)
+            # ... and always connect by default.
+            usb_serial.connect     .eq(1)
         ]
 
-        #
-        # Address register logic.
-        #
-
-        # Perform a read request whenever the user writes to ULPI address...
-        m.d.sync += ulpi_reg_window.read_request.eq(self._address.w_stb)
-
-        # And update the register address accordingly.
-        with m.If(self._address.w_stb):
-            m.d.sync += ulpi_reg_window.address.eq(self._address.w_data)
-
-
-        #
-        # Value register logic.
-        #
-
-        # Always report back the last read data.
-        m.d.comb += self._value.r_data.eq(ulpi_reg_window.read_data)
-
-        # Perform a write whenever the user writes to our ULPI value.
-        m.d.sync += ulpi_reg_window.write_request.eq(self._value.w_stb)
-        with m.If(self._address.w_stb):
-            m.d.sync += ulpi_reg_window.write_data.eq(self._value.w_data)
-
-
-        #
-        # Busy register logic.
-        #
-        m.d.comb += self._busy.r_data.eq(ulpi_reg_window.busy)
-
         return m
-
-
-
 
 class LunaCPUExample(Elaboratable):
     """ Simple example of building a simple SoC around LUNA. """
 
     def __init__(self):
-        clock_freq = 100e6
+        clock_freq = 60e6
 
 
         # Create our SoC...
@@ -147,7 +93,6 @@ class LunaCPUExample(Elaboratable):
 
         soc.add_rom('hello_world.bin', size=0x1000)
         soc.add_ram(0x1000)
-
 
         # ...  add our UART peripheral...
         self.uart_pins = Record([
@@ -171,9 +116,6 @@ class LunaCPUExample(Elaboratable):
         leds = LEDPeripheral()
         soc.add_peripheral(leds)
 
-        ulpi = ULPIRegisterPeripheral(name="ulpi", io_resource_name="ulpi")
-        soc.add_peripheral(ulpi)
-
 
     def elaborate(self, platform):
         m = Module()
@@ -181,6 +123,8 @@ class LunaCPUExample(Elaboratable):
 
         # Generate our domain clocks/resets.
         m.submodules.car = platform.clock_domain_generator()
+
+        m.submodules.usb_serial = USBSerialDeviceExample();
 
         # Connect up our UART.
         uart_io = platform.request("uart", 0)
