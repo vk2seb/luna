@@ -20,7 +20,7 @@ import subprocess
 
 from amaranth import *
 from amaranth.build import *
-from amaranth.vendor.xilinx_7series import Xilinx7SeriesPlatform
+from amaranth.vendor import Xilinx7SeriesPlatform
 
 from amaranth_boards.resources import *
 from ..interface.pipe import GearedPIPEInterface

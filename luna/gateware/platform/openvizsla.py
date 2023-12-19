@@ -13,7 +13,7 @@ This is a non-core platform. To use it, you'll need to set your LUNA_PLATFORM va
 
 from amaranth import *
 from amaranth.build import *
-from amaranth.vendor.xilinx_spartan_3_6 import XilinxSpartan6Platform
+from amaranth.vendor import XilinxSpartan6Platform
 
 from amaranth_boards.resources import *
 from .core import LUNAPlatform

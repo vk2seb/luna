@@ -19,7 +19,7 @@ import subprocess
 from amaranth import *
 from amaranth.lib.cdc import ResetSynchronizer
 from amaranth.build import *
-from amaranth.vendor.lattice_ecp5 import *
+from amaranth.vendor import *
 
 from amaranth_boards.logicbone import LogicbonePlatform as _CoreLogicbonePlatform
 from amaranth_boards.logicbone import Logicbone85FPlatform as _CoreLogicbone85FPlatform

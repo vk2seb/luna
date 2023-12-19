@@ -16,7 +16,7 @@ import subprocess
 
 from amaranth import *
 from amaranth.build import *
-from amaranth.vendor.lattice_ice40 import LatticeICE40Platform
+from amaranth.vendor import LatticeICE40Platform
 
 from amaranth_boards.fomu_hacker import FomuHackerPlatform as _FomuHackerPlatform
 from amaranth_boards.fomu_pvt import FomuPVTPlatform as _FomuPVTPlatform

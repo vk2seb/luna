@@ -19,7 +19,7 @@ import logging
 
 from amaranth import *
 from amaranth.build import *
-from amaranth.vendor.xilinx_7series import Xilinx7SeriesPlatform
+from amaranth.vendor import Xilinx7SeriesPlatform
 
 from amaranth_boards.genesys2 import Genesys2Platform as _CoreGenesys2Platform
 from amaranth_boards.resources import *

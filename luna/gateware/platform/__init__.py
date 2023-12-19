@@ -12,7 +12,7 @@ import importlib
 import importlib.util
 
 from amaranth import Record
-from amaranth.vendor.lattice_ecp5 import LatticeECP5Platform
+from amaranth.vendor import LatticeECP5Platform
 
 from .cynthion_r0_1 import CynthionPlatformRev0D1
 from .cynthion_r0_2 import CynthionPlatformRev0D2

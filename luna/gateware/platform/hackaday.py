@@ -19,7 +19,7 @@ import subprocess
 
 from amaranth import *
 from amaranth.build import *
-from amaranth.vendor.lattice_ecp5 import LatticeECP5Platform
+from amaranth.vendor import LatticeECP5Platform
 
 from amaranth_boards.resources import *
 

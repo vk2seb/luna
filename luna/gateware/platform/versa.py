@@ -13,7 +13,7 @@ This is a non-core platform. To use it, you'll need to set your LUNA_PLATFORM va
 
 from amaranth import *
 from amaranth.build import *
-from amaranth.vendor.lattice_ecp5 import LatticeECP5Platform
+from amaranth.vendor import LatticeECP5Platform
 from amaranth.lib.cdc import ResetSynchronizer
 
 from amaranth_boards.versa_ecp5_5g import VersaECP55GPlatform as _VersaECP55G

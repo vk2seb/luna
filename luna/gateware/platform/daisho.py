@@ -10,7 +10,7 @@ import subprocess
 
 from amaranth import *
 from amaranth.build import *
-from amaranth.vendor.intel import IntelPlatform
+from amaranth.vendor import IntelPlatform
 
 from amaranth_boards.resources import *
 

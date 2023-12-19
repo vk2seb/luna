@@ -17,7 +17,7 @@ import subprocess
 
 from amaranth import *
 from amaranth.build import *
-from amaranth.vendor.lattice_ecp5 import LatticeECP5Platform
+from amaranth.vendor import LatticeECP5Platform
 
 from amaranth_boards.orangecrab_r0_1 import OrangeCrabR0_1Platform as _OrangeCrabR0D1Platform
 from amaranth_boards.orangecrab_r0_2 import OrangeCrabR0_2Platform as _OrangeCrabR0D2Platform
