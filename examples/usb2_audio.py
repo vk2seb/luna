@@ -367,5 +367,4 @@ class UAC2RequestHandlers(USBRequestHandler):
                 return m
 
 if __name__ == "__main__":
-    e = USB2AudioInterface()
     top_level_cli(USB2AudioInterface)

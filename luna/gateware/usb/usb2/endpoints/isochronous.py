@@ -268,7 +268,7 @@ class USBIsochronousInStreamEndpoint(Elaboratable):
         # I/O Port
         #
         self.interface      = EndpointInterface()
-        self.stream         = StreamInterface(name=name)
+        self.stream         = StreamInterface()
         self.data_requested = Signal()
         self.frame_finished = Signal()
 
@@ -462,7 +462,7 @@ class USBIsochronousOutStreamEndpoint(Elaboratable):
         #
         # I/O port
         #
-        self.stream    = StreamInterface(name=name)
+        self.stream    = StreamInterface()
         self.interface = EndpointInterface()
 
 
