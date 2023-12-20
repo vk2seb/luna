@@ -23,6 +23,7 @@ from luna.gateware.usb.usb2.request           import USBRequestHandler, StallOnl
 from luna.gateware.usb.stream                 import USBInStreamInterface
 from luna.gateware.stream.generator           import StreamSerializer
 from luna.gateware.stream                     import StreamInterface
+from luna.gateware.architecture.car                    import PHYResetController
 
 class EdgeToPulse(Elaboratable):
     """
@@ -228,6 +229,95 @@ class ChannelsToUSBStream(Elaboratable):
                         m.d.sync += current_channel.eq(current_channel + 1)
                         with m.If(current_channel == last_channel):
                             m.next = "WAIT-FIRST"
+        return m
+
+class Ecpix5DomainGenerator(Elaboratable):
+    def __init__(self, *, clock_frequencies=None, clock_signal_name=None):
+        pass
+
+    def elaborate(self, platform):
+        m = Module()
+
+        clk_i = platform.request(platform.default_clk).i
+        rst_i = Const(0)
+
+        # Create our domains; but don't do anything else for them, for now.
+        m.domains.sync = ClockDomain()
+        m.domains.usb = ClockDomain()
+        m.domains.fast = ClockDomain()
+        m.domains.audio = ClockDomain()
+
+        clkop_fb = Signal()
+        clkos    = Signal()
+        locked   = Signal()
+
+        m.submodules.pll = Instance("EHXPLLL",
+
+            i_CLKI=clk_i,
+
+            o_CLKOP=clkop_fb,
+            o_CLKOS=clkos,
+
+            o_LOCK=locked,
+
+            p_PLLRST_ENA="DISABLED",
+            p_INTFB_WAKE="DISABLED",
+            p_STDBY_ENABLE="DISABLED",
+            p_DPHASE_SOURCE="DISABLED",
+            p_OUTDIVIDER_MUXA="DIVA",
+            p_OUTDIVIDER_MUXB="DIVB",
+            p_OUTDIVIDER_MUXC="DIVC",
+            p_OUTDIVIDER_MUXD="DIVD",
+            p_CLKI_DIV=1,
+            p_CLKOP_ENABLE="ENABLED",
+            p_CLKOP_DIV=6,
+            p_CLKOP_CPHASE=2,
+            p_CLKOP_FPHASE=0,
+            p_CLKOS_ENABLE="ENABLED",
+            p_CLKOS_DIV=48,
+            p_CLKOS_CPHASE=2,
+            p_CLKOS_FPHASE=0,
+            p_FEEDBK_PATH="CLKOP",
+            p_CLKFB_DIV=1,
+
+            i_RST=rst_i,
+            i_STDBY=0,
+            i_PHASESEL0=0,
+            i_PHASESEL1=0,
+            i_PHASEDIR=1,
+            i_PHASESTEP=1,
+            i_PHASELOADREG=1,
+            i_PLLWAKESYNC=0,
+            i_CLKFB=clkop_fb,
+
+            i_ENCLKOP=0,
+            i_ENCLKOS=0,
+
+            a_FREQUENCY_PIN_CLKI="100",
+            a_FREQUENCY_PIN_CLKOP="100",
+            a_FREQUENCY_PIN_CLKOS="12.5",
+            a_ICP_CURRENT="12",
+            a_LPF_RESISTOR="8",
+            a_MFG_ENABLE_FILTEROPAMP="1",
+            a_MFG_GMCREF_SEL="2",
+        )
+
+        m.d.comb += [
+            ClockSignal("sync").eq(clkop_fb),
+            ClockSignal("fast").eq(ClockSignal("sync")),
+            ClockSignal("audio").eq(clkos),
+
+            ResetSignal("sync").eq(~locked),
+            ResetSignal("fast").eq(~locked),
+            ResetSignal("audio").eq(~locked),
+        ]
+
+        # Handle USB PHY resets.
+        m.submodules.usb_reset = controller = PHYResetController()
+        m.d.comb += [
+            ResetSignal("usb")  .eq(controller.phy_reset)
+        ]
+
         return m
 
 class USB2AudioInterface(Elaboratable):
@@ -449,72 +539,11 @@ class USB2AudioInterface(Elaboratable):
         # Windows wants a stereo pair as default setting, so let's have it
         self.create_input_streaming_interface(c, nr_channels=self.NR_CHANNELS, alt_setting_nr=1, channel_config=0x3)
 
-    def add_pll(self, m):
-        """ HACKY 12.288MHz PLL from 100MHz sync domain."""
-
-        m.domains += ClockDomain("audio")
-
-        feedback = Signal()
-        locked   = Signal()
-
-        m.submodules.pll = Instance("EHXPLLL",
-            p_PLLRST_ENA="DISABLED",
-            p_INTFB_WAKE="DISABLED",
-            p_STDBY_ENABLE="DISABLED",
-            p_DPHASE_SOURCE="DISABLED",
-            p_OUTDIVIDER_MUXA="DIVA",
-            p_OUTDIVIDER_MUXB="DIVB",
-            p_OUTDIVIDER_MUXC="DIVC",
-            p_OUTDIVIDER_MUXD="DIVD",
-            p_CLKI_DIV=4,
-            p_CLKOP_ENABLE="ENABLED",
-            p_CLKOP_DIV=29,
-            p_CLKOP_CPHASE=9,
-            p_CLKOP_FPHASE=0,
-            p_CLKOS_ENABLE="ENABLED",
-            p_CLKOS_DIV=59,
-            p_CLKOS_CPHASE=6,
-            p_CLKOS_FPHASE=85,
-            p_FEEDBK_PATH="CLKOP",
-            p_CLKFB_DIV=1,
-
-            i_RST=1,
-            i_STDBY=0,
-            i_CLKI=ClockSignal("sync"), # 100MHz on ECP5
-            i_PHASESEL0=0,
-            i_PHASESEL1=0,
-            i_PHASEDIR=1,
-            i_PHASESTEP=1,
-            i_PHASELOADREG=1,
-            i_PLLWAKESYNC=0,
-            i_ENCLKOP=0,
-            i_CLKFB=feedback,
-
-            o_LOCK=locked,
-            o_CLKOP=feedback,
-            o_CLKOS=ClockSignal("audio"),
-
-            a_FREQUENCY_PIN_CLKI="100",
-            a_FREQUENCY_PIN_CLKOP="12.288",
-            a_FREQUENCY_PIN_CLKOS="12.288",
-            a_ICP_CURRENT="12",
-            a_LPF_RESISTOR="8",
-            a_MFG_ENABLE_FILTEROPAMP="1",
-            a_MFG_GMCREF_SEL="2",
-        )
-
-        m.d.comb += [
-            ResetSignal("audio")    .eq(~locked),
-        ]
-
     def elaborate(self, platform):
         m = Module()
 
         # Generate our domain clocks/resets.
-        m.submodules.car = platform.clock_domain_generator()
-
-        # TODO: generate AUDIO clock here! (256Fs)
-        self.add_pll(m)
+        m.submodules.car = Ecpix5DomainGenerator()
 
         eurorack_pmod = [
             Resource("eurorack_pmod", 0,
@@ -789,4 +818,6 @@ class UAC2RequestHandlers(USBRequestHandler):
                 return m
 
 if __name__ == "__main__":
+    os.environ["AMARANTH_debug_verilog"] = "1"
+    os.environ["LUNA_PLATFORM"] = "luna.gateware.platform.lambdaconcept:ECPIX5PlatformRev02"
     top_level_cli(USB2AudioInterface)
