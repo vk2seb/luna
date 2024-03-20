@@ -505,10 +505,13 @@ class HyperRAMPHY(Elaboratable):
         # Clock
         clk_out = Signal()
         m.submodules += [
-            Instance("ODDRX1F",
+            Instance("ODDRX2F",
                 i_D0=self.phy.clk_en,
-                i_D1=0,
+                i_D1=self.phy.clk_en,
+                i_D2=0,
+                i_D3=0,
                 i_SCLK=ClockSignal(),
+                i_ECLK=ClockSignal("fast"),
                 i_RST=ResetSignal(),
                 o_Q=clk_out,
             ),
@@ -522,10 +525,13 @@ class HyperRAMPHY(Elaboratable):
 
         # RWDS out
         m.submodules += [
-            Instance("ODDRX1F",
+            Instance("ODDRX2F",
                 i_D0=self.phy.rwds.o[1],
-                i_D1=self.phy.rwds.o[0],
+                i_D1=self.phy.rwds.o[1],
+                i_D2=self.phy.rwds.o[0],
+                i_D3=self.phy.rwds.o[0],
                 i_SCLK=ClockSignal(),
+                i_ECLK=ClockSignal("fast"),
                 i_RST=ResetSignal(),
                 o_Q=self.bus.rwds.o,
             ),
@@ -540,12 +546,13 @@ class HyperRAMPHY(Elaboratable):
                 # TODO: connect up move/load/dir
                 p_DEL_VALUE=int(0e-9 / 25e-12),
             ),
-            Instance("IDDRX1F",
+            Instance("IDDRX2F",
                 i_D=rwds_in,
                 i_SCLK=ClockSignal(),
+                i_ECLK=ClockSignal("fast"),
                 i_RST=ResetSignal(),
                 o_Q0=self.phy.rwds.i[1],
-                o_Q1=self.phy.rwds.i[0],
+                o_Q2=self.phy.rwds.i[0],
             ),
         ]
 
@@ -553,10 +560,13 @@ class HyperRAMPHY(Elaboratable):
         for i in range(8):
             # Out
             m.submodules += [
-                Instance("ODDRX1F",
+                Instance("ODDRX2F",
                     i_D0=self.phy.dq.o[i+8],
-                    i_D1=self.phy.dq.o[i],
+                    i_D1=self.phy.dq.o[i+8],
+                    i_D2=self.phy.dq.o[i],
+                    i_D3=self.phy.dq.o[i],
                     i_SCLK=ClockSignal(),
+                    i_ECLK=ClockSignal("fast"),
                     i_RST=ResetSignal(),
                     o_Q=self.bus.dq.o[i],
                 ),
@@ -571,12 +581,13 @@ class HyperRAMPHY(Elaboratable):
                     # TODO: connect up move/load/dir
                     p_DEL_VALUE=int(0e-9 / 25e-12),
                 ),
-                Instance("IDDRX1F",
+                Instance("IDDRX2F",
                     i_D=dq_in,
                     i_SCLK=ClockSignal(),
+                    i_ECLK=ClockSignal("fast"),
                     i_RST=ResetSignal(),
                     o_Q0=self.phy.dq.i[i+8],
-                    o_Q1=self.phy.dq.i[i],
+                    o_Q2=self.phy.dq.i[i],
                 ),
             ]
 
