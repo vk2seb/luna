@@ -1,0 +1,5 @@
+export LUNA_PLATFORM="luna.gateware.platform.ecpix5:ECPIX5_85F_Platform"
+pip install "amaranth_boards @ git+https://github.com/amaranth-lang/amaranth-boards.git"
+pip install "amaranth_soc @ git+https://github.com/amaranth-lang/amaranth-soc.git"
+pip install amaranth==0.4.0
+pip install "amaranth_stdio @ git+https://github.com/amaranth-lang/amaranth-stdio.git@d33387c8598df1cfc21e939d919819983b893edd"
