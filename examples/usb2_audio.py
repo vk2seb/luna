@@ -450,10 +450,7 @@ class USB2AudioInterface(Elaboratable):
         # Windows wants a stereo pair as default setting, so let's have it
         self.create_input_streaming_interface(c, nr_channels=self.NR_CHANNELS, alt_setting_nr=1, channel_config=0x3)
 
-    def elaborate(self, platform):
-        m = Module()
-
-        m.submodules.car = platform.clock_domain_generator()
+    def add_eurorack_pmod(self, m, platform):
 
         eurorack_pmod = [
             Resource("eurorack_pmod", 0,
@@ -471,16 +468,118 @@ class USB2AudioInterface(Elaboratable):
 
         platform.add_resources(eurorack_pmod)
         pmod0 = platform.request("eurorack_pmod")
+
+
+        # Verilog sources
+        vroot = os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                                             "../eurorack-pmod/gateware")
+
+        platform.add_file("eurorack_pmod_defines.sv", "`define HW_R33")
+        platform.add_file("eurorack_pmod.sv", open(os.path.join(vroot, "eurorack_pmod.sv")))
+        platform.add_file("pmod_i2c_master.sv", open(os.path.join(vroot, "drivers/pmod_i2c_master.sv")))
+        platform.add_file("ak4619.sv", open(os.path.join(vroot, "drivers/ak4619.sv")))
+        platform.add_file("cal.sv", open(os.path.join(vroot, "cal/cal.sv")))
+        platform.add_file("i2c_master.sv", open(os.path.join(vroot, "external/no2misc/rtl/i2c_master.v")))
+
+        # .hex files
+        platform.add_file("cal/cal_mem_default_r33.hex",
+                          open(os.path.join(vroot, "cal/cal_mem_default_r33.hex")))
+        platform.add_file("drivers/ak4619-cfg.hex",
+                          open(os.path.join(vroot, "drivers/ak4619-cfg.hex")))
+        platform.add_file("drivers/pca9635-cfg.hex",
+                          open(os.path.join(vroot, "drivers/pca9635-cfg.hex")))
+
+        # clk_fs divider.
+        # not a true clock domain, don't create one.
+        clkdiv_fs = Signal(8)
+        clk_fs = Signal()
+        m.d.audio += clkdiv_fs.eq(clkdiv_fs+1)
+        m.d.comb += clk_fs.eq(clkdiv_fs[-1])
+
+        # eurorack-pmod global pipeline sample width
+        w = 16
+
+        self.cal_in0 = Signal(signed(w))
+        self.cal_in1 = Signal(signed(w))
+        self.cal_in2 = Signal(signed(w))
+        self.cal_in3 = Signal(signed(w))
+
+        self.cal_out0 = Signal(signed(w))
+        self.cal_out1 = Signal(signed(w))
+        self.cal_out2 = Signal(signed(w))
+        self.cal_out3 = Signal(signed(w))
+
+        self.eeprom_mfg = Signal(8)
+        self.eeprom_dev = Signal(8)
+        self.eeprom_serial = Signal(32)
+        self.jack = Signal(8)
+
+        self.sample_adc0 = Signal(signed(w))
+        self.sample_adc1 = Signal(signed(w))
+        self.sample_adc2 = Signal(signed(w))
+        self.sample_adc3 = Signal(signed(w))
+
+        self.force_dac_output = Signal(signed(w))
+
         m.d.comb += [
-            #pmod0.sdin1.o.eq(ClockSignal("audio")),
-            #pmod0.sdout1.o.eq(ClockSignal("audio")),
-            #pmod0.lrck.o.eq(ClockSignal("audio")),
-            #pmod0.bick.o.eq(ClockSignal("audio")),
-            pmod0.mclk.o.eq(ClockSignal("audio")),
-            #pmod0.pdn.o.eq(ClockSignal("audio")),
-            #pmod0.i2c_sda.o.eq(ClockSignal("audio")),
-            #pmod0.i2c_scl.o.eq(ClockSignal("audio")),
+            pmod0.i2c_scl.o.eq(0),
+            pmod0.i2c_sda.o.eq(0),
         ]
+
+        m.submodules.veurorack_pmod = Instance("eurorack_pmod",
+            # Parameters
+            p_W = w,
+
+            # Ports (clk + reset)
+            i_clk_256fs = ClockSignal("audio"),
+            i_clk_fs = clk_fs,
+            i_rst = ResetSignal("audio"),
+
+            # Pads (tristate, require different logic to hook these
+            # up to pads depending on the target platform).
+            o_i2c_scl_oe = pmod0.i2c_scl.oe,
+            i_i2c_scl_i = pmod0.i2c_scl.i,
+            o_i2c_sda_oe = pmod0.i2c_sda.oe,
+            i_i2c_sda_i = pmod0.i2c_sda.i,
+
+            # Pads (directly hooked up to pads without extra logic required)
+            o_pdn = pmod0.pdn.o,
+            o_mclk = pmod0.mclk.o,
+            o_sdin1 = pmod0.sdin1.o,
+            i_sdout1 = pmod0.sdout1.i,
+            o_lrck = pmod0.lrck.o,
+            o_bick = pmod0.bick.o,
+
+            # Ports (clock at clk_fs)
+            o_cal_in0 = self.cal_in0,
+            o_cal_in1 = self.cal_in1,
+            o_cal_in2 = self.cal_in2,
+            o_cal_in3 = self.cal_in3,
+            i_cal_out0 = self.cal_out0,
+            i_cal_out1 = self.cal_out1,
+            i_cal_out2 = self.cal_out2,
+            i_cal_out3 = self.cal_out3,
+
+            # Ports (serialized data fetched over I2C)
+            o_eeprom_mfg = self.eeprom_mfg,
+            o_eeprom_dev = self.eeprom_dev,
+            o_eeprom_serial = self.eeprom_serial,
+            o_jack = self.jack,
+
+            # Debug ports
+            o_sample_adc0 = self.sample_adc0,
+            o_sample_adc1 = self.sample_adc1,
+            o_sample_adc2 = self.sample_adc2,
+            o_sample_adc3 = self.sample_adc3,
+            i_force_dac_output = self.force_dac_output,
+        )
+
+    def elaborate(self, platform):
+        m = Module()
+
+        m.submodules.car = platform.clock_domain_generator()
+
+        self.add_eurorack_pmod(m, platform)
 
         ulpi = platform.request(platform.default_usb_connection)
         m.submodules.usb = usb = USBDevice(bus=ulpi)

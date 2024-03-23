@@ -1,0 +1,3 @@
+[submodule "eurorack-pmod"]
+	path = eurorack-pmod
+	url = git@github.com:apfelaudio/eurorack-pmod.git
