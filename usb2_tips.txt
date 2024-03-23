@@ -3,3 +3,6 @@ pip install "amaranth_boards @ git+https://github.com/amaranth-lang/amaranth-boa
 pip install "amaranth_soc @ git+https://github.com/amaranth-lang/amaranth-soc.git"
 pip install amaranth==0.4.0
 pip install "amaranth_stdio @ git+https://github.com/amaranth-lang/amaranth-stdio.git@d33387c8598df1cfc21e939d919819983b893edd"
+
+On occasion reinstall or
+luna/gateware/platform/ecpix5.py /home/seb/dev/usb2-highspeed-core/venv/lib/python3.11/site-packages/luna/gateware/platform/ecpix5.py

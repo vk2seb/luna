@@ -457,14 +457,14 @@ class USB2AudioInterface(Elaboratable):
 
         eurorack_pmod = [
             Resource("eurorack_pmod", 0,
-                Subsignal("sdin1",   Pins("1",  conn=("pmod",0))),
-                Subsignal("sdout1",  Pins("2",  conn=("pmod",0))),
-                Subsignal("lrck",    Pins("3",  conn=("pmod",0))),
-                Subsignal("bick",    Pins("4",  conn=("pmod",0))),
+                Subsignal("sdin1",   Pins("1",  conn=("pmod",0), dir='o')),
+                Subsignal("sdout1",  Pins("2",  conn=("pmod",0), dir='i')),
+                Subsignal("lrck",    Pins("3",  conn=("pmod",0), dir='o')),
+                Subsignal("bick",    Pins("4",  conn=("pmod",0), dir='o')),
                 Subsignal("mclk",    Pins("10", conn=("pmod",0), dir='o')),
-                Subsignal("pdn",     Pins("9",  conn=("pmod",0))),
-                Subsignal("i2c_sda", Pins("8",  conn=("pmod",0))),
-                Subsignal("i2c_scl", Pins("7",  conn=("pmod",0))),
+                Subsignal("pdn",     Pins("9",  conn=("pmod",0), dir='o')),
+                Subsignal("i2c_sda", Pins("8",  conn=("pmod",0), dir='io')),
+                Subsignal("i2c_scl", Pins("7",  conn=("pmod",0), dir='io')),
                 Attrs(IO_TYPE="LVCMOS33"),
             )
         ]
