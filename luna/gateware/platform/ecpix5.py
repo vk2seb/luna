@@ -43,13 +43,11 @@ class ECPIX5DomainGenerator(Elaboratable):
         m.domains.ss     = ClockDomain()
         m.domains.sync   = ClockDomain()
         m.domains.usb    = ClockDomain()
-        m.domains.usb_io = ClockDomain()
         m.domains.fast   = ClockDomain()
+        m.domains.audio  = ClockDomain()
 
-
-        # Grab our clock and global reset signals.
-        clk100 = platform.request(platform.default_clk)
-        reset  = platform.request(platform.default_rst)
+        clk100 = platform.request(platform.default_clk, dir='i').i
+        reset  = platform.request(platform.default_rst, dir='i').i
 
         # Generate the clocks we need for running our SerDes.
         feedback = Signal()
@@ -125,13 +123,12 @@ class ECPIX5DomainGenerator(Elaboratable):
                 a_LPF_RESISTOR="8"
         )
 
-        # Temporary: USB FS PLL
         feedback    = Signal()
-        usb2_locked = Signal()
-        m.submodules.fs_pll = Instance("EHXPLLL",
+        audio_locked = Signal()
+        m.submodules.audio_pll = Instance("EHXPLLL",
 
                 # Status.
-                o_LOCK=usb2_locked,
+                o_LOCK=audio_locked,
 
                 # PLL parameters...
                 p_PLLRST_ENA="ENABLED",
@@ -143,29 +140,17 @@ class ECPIX5DomainGenerator(Elaboratable):
                 p_OUTDIVIDER_MUXC="DIVC",
                 p_OUTDIVIDER_MUXD="DIVD",
 
-                p_CLKI_DIV = 20,
+                p_CLKI_DIV = 4,
                 p_CLKOP_ENABLE = "ENABLED",
-                p_CLKOP_DIV = 16,
-                p_CLKOP_CPHASE = 15,
+                p_CLKOP_DIV = 29,
+                p_CLKOP_CPHASE = 9,
                 p_CLKOP_FPHASE = 0,
-
-                p_CLKOS_DIV = 12,
+                p_CLKOS_ENABLE = "ENABLED",
+                p_CLKOS_DIV = 59,
                 p_CLKOS_CPHASE = 0,
                 p_CLKOS_FPHASE = 0,
-
-
-                p_CLKOS2_ENABLE = "ENABLED",
-                p_CLKOS2_DIV = 10,
-                p_CLKOS2_CPHASE = 0,
-                p_CLKOS2_FPHASE = 0,
-
-                p_CLKOS3_ENABLE = "ENABLED",
-                p_CLKOS3_DIV = 40,
-                p_CLKOS3_CPHASE = 5,
-                p_CLKOS3_FPHASE = 0,
-
                 p_FEEDBK_PATH = "CLKOP",
-                p_CLKFB_DIV = 6,
+                p_CLKFB_DIV = 1,
 
                 # Clock in.
                 i_CLKI=clk100,
@@ -189,14 +174,11 @@ class ECPIX5DomainGenerator(Elaboratable):
 
                 # Generated clock outputs.
                 o_CLKOP=feedback,
-                o_CLKOS2=ClockSignal("usb_io"),
-                o_CLKOS3=ClockSignal("usb"),
+                o_CLKOS=ClockSignal("audio"),
 
                 # Synthesis attributes.
-                a_FREQUENCY_PIN_CLKI="25",
-                a_FREQUENCY_PIN_CLKOP="48",
-                a_FREQUENCY_PIN_CLKOS="48",
-                a_FREQUENCY_PIN_CLKOS2="12",
+                a_FREQUENCY_PIN_CLKI="100",
+                a_FREQUENCY_PIN_CLKOS="12.2881",
                 a_ICP_CURRENT="12",
                 a_LPF_RESISTOR="8",
                 a_MFG_ENABLE_FILTEROPAMP="1",
@@ -211,8 +193,7 @@ class ECPIX5DomainGenerator(Elaboratable):
             ResetSignal("sync")    .eq(~locked),
             ResetSignal("fast")    .eq(~locked),
 
-            ResetSignal("usb")     .eq(~usb2_locked),
-            ResetSignal("usb_io")  .eq(~usb2_locked),
+            ResetSignal("audio")   .eq(~audio_locked),
         ]
 
         return m
