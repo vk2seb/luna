@@ -663,6 +663,16 @@ class USB2AudioInterface(Elaboratable):
             audio_clock_tick.eq(audio_clock_usb_pulse.pulse_out),
         ]
 
+        ## IDEAS
+        ## Same EdgeToPulse pattern for clk_256fs -> clk_fs strobe (in audio domain)
+        ## AsyncFIFO for clk_256fs (valid on strobe) -> usb domain stream
+        ## Warn: channel_no synchronization: test with some assumptions before integrating?
+        ## DAC side will probably be easier -- read implementation of USB -> Channel component
+        ## >>> Output channel numbers are always alternating
+        ## >>> But they still should go through some FIFOs? Origin is USB domain.
+        ## AsyncFIFO with payload for all samples (cd_audio) -> (cd_usb)
+        ## Then state machine in cd_usb to read the samples into a destination stream
+
         with m.If(audio_clock_tick):
             m.d.usb += audio_clock_counter.eq(audio_clock_counter + 1)
 
