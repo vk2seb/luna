@@ -704,19 +704,24 @@ class USB2AudioInterface(Elaboratable):
             DomainRenamer("usb")(ChannelsToUSBStream(self.NR_CHANNELS))
 
 
-        audio_big_counter = Signal(32)
-        with m.If(audio_clock_tick):
-            m.d.usb += audio_big_counter.eq(audio_big_counter + 1)
-
+        # Sample width used in underlying I2S driver. TODO: inherit from top-level component.
         SW=16
-        m.submodules.adc_fifo = adc_fifo = AsyncFIFO(width=SW*4, depth=64, w_domain="audio", r_domain="usb")
 
+        # Create a strobe from the sample clock 'clk_fs` that asserts for 1 cycle
+        # per sample in the 'audio' domain. This is useful for latching our samples
+        # and hooking up to various signals in our FIFOs.
         fs_strobe = Signal()
         m.submodules.fs_edge = fs_edge = DomainRenamer("audio")(EdgeToPulse())
-        m.d.audio += [
-            fs_edge.edge_in.eq(self.clk_fs),
+        m.d.audio += fs_edge.edge_in.eq(self.clk_fs),
 
-            # warn: ignoring rdy // should be fine
+        # adc_fifo contains one entry per sample strobe in the audio domain, where each entry contains
+        # a concatenated binary string of all input channels in one entry.
+
+        m.submodules.adc_fifo = adc_fifo = AsyncFIFO(width=SW*4, depth=64, w_domain="audio", r_domain="usb")
+
+        m.d.audio += [
+            # FIXME: ignoring rdy in write domain. Should be fine as write domain
+            # will always be slower than the read domain, but should be fixed.
             adc_fifo.w_en.eq(fs_edge.pulse_out),
             adc_fifo.w_data[    :SW*1].eq(self.cal_in0),
             adc_fifo.w_data[SW*1:SW*2].eq(self.cal_in1),
@@ -724,65 +729,49 @@ class USB2AudioInterface(Elaboratable):
             adc_fifo.w_data[SW*3:SW*4].eq(self.cal_in3),
         ]
 
+        # In the USB domain, unpack samples from the adc_fifo (one big concatenated
+        # entry with samples for all channels once per sample strobe) and feed them
+        # into ChannelsToUSBStream with one entry per channel, i.e 1 -> 4 entries
+        # per sample strobe in the audio domain.
+
+        # Storage for samples in the USB domain as we send them to the channel stream.
         adc_latched = Signal(SW*4)
 
-        # ADC FSM
         with m.FSM(domain="usb") as fsm:
+
             with m.State('WAIT'):
                 m.d.usb += channels_to_usb_stream.channel_stream_in.valid.eq(0),
                 with m.If(adc_fifo.r_rdy):
                     m.d.usb += adc_fifo.r_en.eq(1)
                     m.next = 'LATCH'
+
             with m.State('LATCH'):
                 m.d.usb += [
                     adc_fifo.r_en.eq(0),
                     adc_latched.eq(adc_fifo.r_data)
                 ]
                 m.next = 'CH0'
-            with m.State('CH0'):
-                m.d.usb += [
-                    channels_to_usb_stream.channel_stream_in.payload.eq(Cat(Const(0, 8), adc_latched[:SW])),
-                    channels_to_usb_stream.channel_stream_in.channel_no.eq(0),
-                    channels_to_usb_stream.channel_stream_in.valid.eq(1),
-                ]
-                m.next = 'CH0-SEND'
-            with m.State('CH0-SEND'):
-                with m.If(channels_to_usb_stream.channel_stream_in.ready):
-                    m.d.usb += channels_to_usb_stream.channel_stream_in.valid.eq(0)
-                    m.next = 'CH1'
-            with m.State('CH1'):
-                m.d.usb += [
-                    channels_to_usb_stream.channel_stream_in.payload.eq(Cat(Const(0, 8), adc_latched[SW*1:SW*2])),
-                    channels_to_usb_stream.channel_stream_in.channel_no.eq(1),
-                    channels_to_usb_stream.channel_stream_in.valid.eq(1),
-                ]
-                m.next = 'CH1-SEND'
-            with m.State('CH1-SEND'):
-                with m.If(channels_to_usb_stream.channel_stream_in.ready):
-                    m.d.usb += channels_to_usb_stream.channel_stream_in.valid.eq(0)
-                    m.next = 'CH2'
-            with m.State('CH2'):
-                m.d.usb += [
-                    channels_to_usb_stream.channel_stream_in.payload.eq(Cat(Const(0, 8), adc_latched[SW*2:SW*3])),
-                    channels_to_usb_stream.channel_stream_in.channel_no.eq(2),
-                    channels_to_usb_stream.channel_stream_in.valid.eq(1),
-                ]
-                m.next = 'CH2-SEND'
-            with m.State('CH2-SEND'):
-                with m.If(channels_to_usb_stream.channel_stream_in.ready):
-                    m.d.usb += channels_to_usb_stream.channel_stream_in.valid.eq(0)
-                    m.next = 'CH3'
-            with m.State('CH3'):
-                m.d.usb += [
-                    channels_to_usb_stream.channel_stream_in.payload.eq(Cat(Const(0, 8), adc_latched[SW*3:SW*4])),
-                    channels_to_usb_stream.channel_stream_in.channel_no.eq(3),
-                    channels_to_usb_stream.channel_stream_in.valid.eq(1),
-                ]
-                m.next = 'CH3-SEND'
-            with m.State('CH3-SEND'):
-                with m.If(channels_to_usb_stream.channel_stream_in.ready):
-                    m.d.usb += channels_to_usb_stream.channel_stream_in.valid.eq(0)
-                    m.next = 'WAIT'
+
+            def generate_channel_states(channel, next_state_name):
+                with m.State(f'CH{channel}'):
+                    m.d.usb += [
+                        # FIXME: currently filling bottom 8 bits with zeroes for 16bit -> 24bit
+                        # sample conversion. Better to just switch native rate of I2S driver.
+                        channels_to_usb_stream.channel_stream_in.payload.eq(
+                            Cat(Const(0, 8), adc_latched[channel*SW:(channel+1)*SW])),
+                        channels_to_usb_stream.channel_stream_in.channel_no.eq(channel),
+                        channels_to_usb_stream.channel_stream_in.valid.eq(1),
+                    ]
+                    m.next = f'CH{channel}-SEND'
+                with m.State(f'CH{channel}-SEND'):
+                    with m.If(channels_to_usb_stream.channel_stream_in.ready):
+                        m.d.usb += channels_to_usb_stream.channel_stream_in.valid.eq(0)
+                        m.next = next_state_name
+
+            generate_channel_states(0, 'CH1')
+            generate_channel_states(1, 'CH2')
+            generate_channel_states(2, 'CH3')
+            generate_channel_states(3, 'WAIT')
 
         m.submodules.dac_fifo0 = dac_fifo0 = AsyncFIFO(width=16, depth=64, w_domain="usb", r_domain="audio")
         m.submodules.dac_fifo1 = dac_fifo1 = AsyncFIFO(width=16, depth=64, w_domain="usb", r_domain="audio")
