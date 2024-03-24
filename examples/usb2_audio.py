@@ -7,7 +7,7 @@ import os
 from amaranth              import *
 from amaranth.build        import *
 from amaranth.lib.cdc      import FFSynchronizer
-from amaranth.lib.fifo     import SyncFIFO
+from amaranth.lib.fifo     import SyncFIFO, AsyncFIFO
 
 from luna                import top_level_cli
 from luna.usb2           import USBDevice, USBIsochronousInMemoryEndpoint, USBIsochronousOutStreamEndpoint, USBIsochronousInStreamEndpoint
@@ -492,7 +492,7 @@ class USB2AudioInterface(Elaboratable):
         # clk_fs divider.
         # not a true clock domain, don't create one.
         clkdiv_fs = Signal(8)
-        clk_fs = Signal()
+        self.clk_fs = clk_fs = Signal()
         m.d.audio += clkdiv_fs.eq(clkdiv_fs+1)
         m.d.comb += clk_fs.eq(clkdiv_fs[-1])
 
@@ -708,6 +708,52 @@ class USB2AudioInterface(Elaboratable):
         with m.If(audio_clock_tick):
             m.d.usb += audio_big_counter.eq(audio_big_counter + 1)
 
+        m.submodules.adc_fifo0 = adc_fifo0 = AsyncFIFO(width=16, depth=64, w_domain="audio", r_domain="usb")
+        m.submodules.adc_fifo1 = adc_fifo1 = AsyncFIFO(width=16, depth=64, w_domain="audio", r_domain="usb")
+
+        fs_strobe = Signal()
+        m.submodules.fs_edge = fs_edge = DomainRenamer("audio")(EdgeToPulse())
+        m.d.audio += [
+            fs_edge.edge_in.eq(self.clk_fs),
+
+            # warn: ignoring rdy // should be fine
+            adc_fifo0.w_data.eq(self.cal_in0),
+            adc_fifo0.w_en.eq(fs_edge.pulse_out),
+
+            adc_fifo1.w_data.eq(self.cal_in1),
+            adc_fifo1.w_en.eq(fs_edge.pulse_out),
+        ]
+
+        with m.FSM(domain="usb") as fsm:
+            with m.State('CH0-WAIT'):
+                m.d.usb += channels_to_usb_stream.channel_stream_in.valid.eq(0)
+                with m.If(adc_fifo0.r_rdy):
+                    m.d.usb += adc_fifo0.r_en.eq(1)
+                    m.next = 'CH0'
+                with m.Else():
+                    m.d.usb += adc_fifo0.r_en.eq(0)
+            with m.State('CH0'):
+                m.d.usb += [
+                    channels_to_usb_stream.channel_stream_in.payload.eq(adc_fifo0.r_data),
+                    channels_to_usb_stream.channel_stream_in.channel_no.eq(0),
+                    channels_to_usb_stream.channel_stream_in.valid.eq(1),
+                ]
+                m.next = 'CH1-WAIT'
+            with m.State('CH1-WAIT'):
+                m.d.usb += channels_to_usb_stream.channel_stream_in.valid.eq(0)
+                with m.If(adc_fifo1.r_rdy):
+                    m.d.usb += adc_fifo1.r_en.eq(1)
+                    m.next = 'CH1'
+                with m.Else():
+                    m.d.usb += adc_fifo1.r_en.eq(0)
+            with m.State('CH1'):
+                m.d.usb += [
+                    channels_to_usb_stream.channel_stream_in.payload.eq(adc_fifo1.r_data),
+                    channels_to_usb_stream.channel_stream_in.channel_no.eq(1),
+                    channels_to_usb_stream.channel_stream_in.valid.eq(1),
+                ]
+                m.next = 'CH0-WAIT'
+
         m.d.comb += [
             # Wire USB <-> stream synchronizers
             usb_to_channel_stream.usb_stream_in.stream_eq(ep1_out.stream),
@@ -725,9 +771,9 @@ class USB2AudioInterface(Elaboratable):
             #channels_to_usb_stream.channel_stream_in.stream_eq(i2s_receiver.stream_out),
             #channels_to_usb_stream.channel_stream_in.channel_no.eq(~i2s_receiver.stream_out.first),
             # TODO: this is a HACK: Override stream OUT, always valid, channel 0 bumps FSM
-            channels_to_usb_stream.channel_stream_in.valid.eq(1),
-            channels_to_usb_stream.channel_stream_in.payload.eq(audio_big_counter[16:]),
-            channels_to_usb_stream.channel_stream_in.channel_no.eq(0),
+            #channels_to_usb_stream.channel_stream_in.valid.eq(1),
+            #channels_to_usb_stream.channel_stream_in.payload.eq(audio_big_counter[16:]),
+            #channels_to_usb_stream.channel_stream_in.channel_no.eq(0),
 
         ]
 
