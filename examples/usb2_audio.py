@@ -761,11 +761,15 @@ class USB2AudioInterface(Elaboratable):
                     m.next = 'CH0-WAIT'
 
         m.submodules.dac_fifo0 = dac_fifo0 = AsyncFIFO(width=16, depth=64, w_domain="usb", r_domain="audio")
+        m.submodules.dac_fifo1 = dac_fifo1 = AsyncFIFO(width=16, depth=64, w_domain="usb", r_domain="audio")
         m.d.comb += [
             dac_fifo0.w_data.eq(usb_to_channel_stream.channel_stream_out.payload[8:]),
             dac_fifo0.w_en.eq((usb_to_channel_stream.channel_stream_out.channel_no == 0) &
                               usb_to_channel_stream.channel_stream_out.valid),
-            usb_to_channel_stream.channel_stream_out.ready.eq(dac_fifo0.w_rdy), #TODO
+            dac_fifo1.w_data.eq(usb_to_channel_stream.channel_stream_out.payload[8:]),
+            dac_fifo1.w_en.eq((usb_to_channel_stream.channel_stream_out.channel_no == 1) &
+                              usb_to_channel_stream.channel_stream_out.valid),
+            usb_to_channel_stream.channel_stream_out.ready.eq(dac_fifo0.w_rdy | dac_fifo1.w_rdy),
         ]
 
         with m.FSM(domain="audio") as fsm:
@@ -777,6 +781,18 @@ class USB2AudioInterface(Elaboratable):
                 m.d.audio += [
                     dac_fifo0.r_en.eq(0),
                     self.cal_out0.eq(dac_fifo0.r_data),
+                ]
+                m.next = 'READ'
+
+        with m.FSM(domain="audio") as fsm:
+            with m.State('READ'):
+                with m.If(fs_edge.pulse_out & dac_fifo1.r_rdy):
+                    m.d.audio += dac_fifo1.r_en.eq(1)
+                    m.next = 'SEND'
+            with m.State('SEND'):
+                m.d.audio += [
+                    dac_fifo1.r_en.eq(0),
+                    self.cal_out1.eq(dac_fifo1.r_data),
                 ]
                 m.next = 'READ'
 
