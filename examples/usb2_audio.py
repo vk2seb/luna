@@ -726,35 +726,39 @@ class USB2AudioInterface(Elaboratable):
 
         with m.FSM(domain="usb") as fsm:
             with m.State('CH0-WAIT'):
-                m.d.usb += channels_to_usb_stream.channel_stream_in.valid.eq(0)
+                m.d.usb += channels_to_usb_stream.channel_stream_in.valid.eq(0),
                 with m.If(adc_fifo0.r_rdy):
                     m.d.usb += adc_fifo0.r_en.eq(1)
-                    m.next = 'CH0'
-                with m.Else():
-                    m.d.usb += adc_fifo0.r_en.eq(0)
-            with m.State('CH0'):
+                    m.next = 'CH0-LATCH'
+            with m.State('CH0-LATCH'):
                 m.d.usb += [
+                    adc_fifo0.r_en.eq(0),
                     channels_to_usb_stream.channel_stream_in.payload.eq(Cat(Const(0, 8), adc_fifo0.r_data)),
                     channels_to_usb_stream.channel_stream_in.channel_no.eq(0),
                     channels_to_usb_stream.channel_stream_in.valid.eq(1),
-                    adc_fifo0.r_en.eq(0),
                 ]
-                m.next = 'CH1-WAIT'
+                m.next = 'CH0-SEND'
+            with m.State('CH0-SEND'):
+                with m.If(channels_to_usb_stream.channel_stream_in.ready):
+                    m.d.usb += channels_to_usb_stream.channel_stream_in.valid.eq(0)
+                    m.next = 'CH1-WAIT'
             with m.State('CH1-WAIT'):
-                m.d.usb += channels_to_usb_stream.channel_stream_in.valid.eq(0)
+                m.d.usb += channels_to_usb_stream.channel_stream_in.valid.eq(0),
                 with m.If(adc_fifo1.r_rdy):
-                    m.d.usb += adc_fifo1.r_en.eq(1)
-                    m.next = 'CH1'
-                with m.Else():
-                    m.d.usb += adc_fifo1.r_en.eq(0)
-            with m.State('CH1'):
+                    m.d.usb += adc_fifo0.r_en.eq(1)
+                    m.next = 'CH1-LATCH'
+            with m.State('CH1-LATCH'):
                 m.d.usb += [
+                    adc_fifo1.r_en.eq(0),
                     channels_to_usb_stream.channel_stream_in.payload.eq(Cat(Const(0, 8), adc_fifo1.r_data)),
                     channels_to_usb_stream.channel_stream_in.channel_no.eq(1),
                     channels_to_usb_stream.channel_stream_in.valid.eq(1),
-                    adc_fifo1.r_en.eq(0),
                 ]
-                m.next = 'CH0-WAIT'
+                m.next = 'CH1-SEND'
+            with m.State('CH1-SEND'):
+                with m.If(channels_to_usb_stream.channel_stream_in.ready):
+                    m.d.usb += channels_to_usb_stream.channel_stream_in.valid.eq(0)
+                    m.next = 'CH0-WAIT'
 
         m.d.comb += [
             # Wire USB <-> stream synchronizers
