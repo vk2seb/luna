@@ -800,23 +800,6 @@ class USB2AudioInterface(Elaboratable):
             # Wire USB <-> stream synchronizers
             usb_to_channel_stream.usb_stream_in.stream_eq(ep1_out.stream),
             ep2_in.stream.stream_eq(channels_to_usb_stream.usb_stream_out),
-
-            # Wire stream synchronizers <-> fake data (for now)
-
-            # TODO: replace
-            # i2s_transmitter.stream_in.stream_eq(usb_to_channel_stream.channel_stream_out),
-            # TODO: this is a HACK: Override stream IN, always ready
-            usb_to_channel_stream.channel_stream_out.ready.eq(1),
-
-            # wire I2S receiver to USB
-            # TODO: replace
-            #channels_to_usb_stream.channel_stream_in.stream_eq(i2s_receiver.stream_out),
-            #channels_to_usb_stream.channel_stream_in.channel_no.eq(~i2s_receiver.stream_out.first),
-            # TODO: this is a HACK: Override stream OUT, always valid, channel 0 bumps FSM
-            #channels_to_usb_stream.channel_stream_in.valid.eq(1),
-            #channels_to_usb_stream.channel_stream_in.payload.eq(audio_big_counter[16:]),
-            #channels_to_usb_stream.channel_stream_in.channel_no.eq(0),
-
         ]
 
         return m
