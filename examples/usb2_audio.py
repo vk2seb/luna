@@ -745,7 +745,7 @@ class USB2AudioInterface(Elaboratable):
             with m.State('CH1-WAIT'):
                 m.d.usb += channels_to_usb_stream.channel_stream_in.valid.eq(0),
                 with m.If(adc_fifo1.r_rdy):
-                    m.d.usb += adc_fifo0.r_en.eq(1)
+                    m.d.usb += adc_fifo1.r_en.eq(1)
                     m.next = 'CH1-LATCH'
             with m.State('CH1-LATCH'):
                 m.d.usb += [
