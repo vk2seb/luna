@@ -233,7 +233,7 @@ class ChannelsToUSBStream(Elaboratable):
 
 class USB2AudioInterface(Elaboratable):
     """ USB Audio Class v2 interface """
-    NR_CHANNELS = 2
+    NR_CHANNELS = 4
     MAX_PACKET_SIZE = 512 # NR_CHANNELS * 24 + 4
     USE_ILA = False
     ILA_MAX_PACKET_SIZE = 512
@@ -708,32 +708,40 @@ class USB2AudioInterface(Elaboratable):
         with m.If(audio_clock_tick):
             m.d.usb += audio_big_counter.eq(audio_big_counter + 1)
 
-        m.submodules.adc_fifo0 = adc_fifo0 = AsyncFIFO(width=16, depth=64, w_domain="audio", r_domain="usb")
-        m.submodules.adc_fifo1 = adc_fifo1 = AsyncFIFO(width=16, depth=64, w_domain="audio", r_domain="usb")
+        SW=16
+        m.submodules.adc_fifo = adc_fifo = AsyncFIFO(width=SW*4, depth=64, w_domain="audio", r_domain="usb")
+
         fs_strobe = Signal()
         m.submodules.fs_edge = fs_edge = DomainRenamer("audio")(EdgeToPulse())
         m.d.audio += [
             fs_edge.edge_in.eq(self.clk_fs),
 
             # warn: ignoring rdy // should be fine
-            adc_fifo0.w_data.eq(self.cal_in0),
-            adc_fifo0.w_en.eq(fs_edge.pulse_out),
-
-            adc_fifo1.w_data.eq(self.cal_in1),
-            adc_fifo1.w_en.eq(fs_edge.pulse_out),
+            adc_fifo.w_en.eq(fs_edge.pulse_out),
+            adc_fifo.w_data[    :SW*1].eq(self.cal_in0),
+            adc_fifo.w_data[SW*1:SW*2].eq(self.cal_in1),
+            adc_fifo.w_data[SW*2:SW*3].eq(self.cal_in2),
+            adc_fifo.w_data[SW*3:SW*4].eq(self.cal_in3),
         ]
+
+        adc_latched = Signal(SW*4)
 
         # ADC FSM
         with m.FSM(domain="usb") as fsm:
-            with m.State('CH0-WAIT'):
+            with m.State('WAIT'):
                 m.d.usb += channels_to_usb_stream.channel_stream_in.valid.eq(0),
-                with m.If(adc_fifo0.r_rdy):
-                    m.d.usb += adc_fifo0.r_en.eq(1)
-                    m.next = 'CH0-LATCH'
-            with m.State('CH0-LATCH'):
+                with m.If(adc_fifo.r_rdy):
+                    m.d.usb += adc_fifo.r_en.eq(1)
+                    m.next = 'LATCH'
+            with m.State('LATCH'):
                 m.d.usb += [
-                    adc_fifo0.r_en.eq(0),
-                    channels_to_usb_stream.channel_stream_in.payload.eq(Cat(Const(0, 8), adc_fifo0.r_data)),
+                    adc_fifo.r_en.eq(0),
+                    adc_latched.eq(adc_fifo.r_data)
+                ]
+                m.next = 'CH0'
+            with m.State('CH0'):
+                m.d.usb += [
+                    channels_to_usb_stream.channel_stream_in.payload.eq(Cat(Const(0, 8), adc_latched[:SW])),
                     channels_to_usb_stream.channel_stream_in.channel_no.eq(0),
                     channels_to_usb_stream.channel_stream_in.valid.eq(1),
                 ]
@@ -741,16 +749,10 @@ class USB2AudioInterface(Elaboratable):
             with m.State('CH0-SEND'):
                 with m.If(channels_to_usb_stream.channel_stream_in.ready):
                     m.d.usb += channels_to_usb_stream.channel_stream_in.valid.eq(0)
-                    m.next = 'CH1-WAIT'
-            with m.State('CH1-WAIT'):
-                m.d.usb += channels_to_usb_stream.channel_stream_in.valid.eq(0),
-                with m.If(adc_fifo1.r_rdy):
-                    m.d.usb += adc_fifo1.r_en.eq(1)
-                    m.next = 'CH1-LATCH'
-            with m.State('CH1-LATCH'):
+                    m.next = 'CH1'
+            with m.State('CH1'):
                 m.d.usb += [
-                    adc_fifo1.r_en.eq(0),
-                    channels_to_usb_stream.channel_stream_in.payload.eq(Cat(Const(0, 8), adc_fifo1.r_data)),
+                    channels_to_usb_stream.channel_stream_in.payload.eq(Cat(Const(0, 8), adc_latched[SW*1:SW*2])),
                     channels_to_usb_stream.channel_stream_in.channel_no.eq(1),
                     channels_to_usb_stream.channel_stream_in.valid.eq(1),
                 ]
@@ -758,7 +760,29 @@ class USB2AudioInterface(Elaboratable):
             with m.State('CH1-SEND'):
                 with m.If(channels_to_usb_stream.channel_stream_in.ready):
                     m.d.usb += channels_to_usb_stream.channel_stream_in.valid.eq(0)
-                    m.next = 'CH0-WAIT'
+                    m.next = 'CH2'
+            with m.State('CH2'):
+                m.d.usb += [
+                    channels_to_usb_stream.channel_stream_in.payload.eq(Cat(Const(0, 8), adc_latched[SW*2:SW*3])),
+                    channels_to_usb_stream.channel_stream_in.channel_no.eq(2),
+                    channels_to_usb_stream.channel_stream_in.valid.eq(1),
+                ]
+                m.next = 'CH2-SEND'
+            with m.State('CH2-SEND'):
+                with m.If(channels_to_usb_stream.channel_stream_in.ready):
+                    m.d.usb += channels_to_usb_stream.channel_stream_in.valid.eq(0)
+                    m.next = 'CH3'
+            with m.State('CH3'):
+                m.d.usb += [
+                    channels_to_usb_stream.channel_stream_in.payload.eq(Cat(Const(0, 8), adc_latched[SW*3:SW*4])),
+                    channels_to_usb_stream.channel_stream_in.channel_no.eq(3),
+                    channels_to_usb_stream.channel_stream_in.valid.eq(1),
+                ]
+                m.next = 'CH3-SEND'
+            with m.State('CH3-SEND'):
+                with m.If(channels_to_usb_stream.channel_stream_in.ready):
+                    m.d.usb += channels_to_usb_stream.channel_stream_in.valid.eq(0)
+                    m.next = 'WAIT'
 
         m.submodules.dac_fifo0 = dac_fifo0 = AsyncFIFO(width=16, depth=64, w_domain="usb", r_domain="audio")
         m.submodules.dac_fifo1 = dac_fifo1 = AsyncFIFO(width=16, depth=64, w_domain="usb", r_domain="audio")
