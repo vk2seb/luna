@@ -485,5 +485,5 @@ class UAC2RequestHandlers(USBRequestHandler):
 
 if __name__ == "__main__":
     os.environ["AMARANTH_debug_verilog"] = "1"
-    os.environ["LUNA_PLATFORM"] = "luna.gateware.platform.ecpix5:ECPIX5_85F_Platform"
+    os.environ["LUNA_PLATFORM"] = "ecpix5:ECPIX5_85F_Platform"
     top_level_cli(USB2AudioInterface)
