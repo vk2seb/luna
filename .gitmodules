@@ -1,0 +1,3 @@
+[submodule "examples/usb2_audio/eurorack-pmod"]
+	path = examples/usb2_audio/eurorack-pmod
+	url = https://github.com/apfelaudio/eurorack-pmod
