@@ -410,6 +410,8 @@ class UAC2RequestHandlers(USBRequestHandler):
             with m.If((setup.recipient == USBRequestRecipient.INTERFACE) &
                       (setup.request == USBStandardRequests.SET_INTERFACE)):
 
+                m.d.comb += interface.claim.eq(1)
+
                 interface_nr   = setup.index
                 alt_setting_nr = setup.value
 
@@ -437,6 +439,7 @@ class UAC2RequestHandlers(USBRequestHandler):
         with m.Elif(setup.type == USBRequestType.CLASS):
             with m.Switch(setup.request):
                 with m.Case(AudioClassSpecificRequestCodes.RANGE):
+                    m.d.comb += interface.claim.eq(1)
                     m.d.comb += transmitter.stream.attach(self.interface.tx)
 
                     with m.If(request_clock_freq):
@@ -460,6 +463,7 @@ class UAC2RequestHandlers(USBRequestHandler):
                         m.d.comb += interface.handshakes_out.ack.eq(1)
 
                 with m.Case(AudioClassSpecificRequestCodes.CUR):
+                    m.d.comb += interface.claim.eq(1)
                     m.d.comb += transmitter.stream.attach(self.interface.tx)
                     with m.If(request_clock_freq & (setup.length == 4)):
                         m.d.comb += [
@@ -476,13 +480,6 @@ class UAC2RequestHandlers(USBRequestHandler):
                     # ... and ACK our status stage.
                     with m.If(interface.status_requested):
                         m.d.comb += interface.handshakes_out.ack.eq(1)
-
-                with m.Case():
-                    #
-                    # Stall unhandled requests.
-                    #
-                    with m.If(interface.status_requested | interface.data_requested):
-                        m.d.comb += interface.handshakes_out.stall.eq(1)
 
                 return m
 
