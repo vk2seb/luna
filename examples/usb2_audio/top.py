@@ -1,7 +1,8 @@
-#!/usr/bin/env python3
-#
 # Copyright (c) 2021 Hans Baier <hansfbaier@gmail.com>
+# Copyright (c) 2024 Seb Holzapfel <me@sebholzapfel.com>
+#
 # SPDX-License-Identifier: BSD--3-Clause
+
 import os
 
 from amaranth              import *
@@ -25,211 +26,11 @@ from luna.gateware.stream.generator           import StreamSerializer
 from luna.gateware.stream                     import StreamInterface
 from luna.gateware.architecture.car                    import PHYResetController
 
-class EdgeToPulse(Elaboratable):
-    """
-        each rising edge of the signal edge_in will be
-        converted to a single clock pulse on pulse_out
-    """
-    def __init__(self):
-        self.edge_in          = Signal()
-        self.pulse_out        = Signal()
-
-    def elaborate(self, platform) -> Module:
-        m = Module()
-
-        edge_last = Signal()
-
-        m.d.sync += edge_last.eq(self.edge_in)
-        with m.If(self.edge_in & ~edge_last):
-            m.d.comb += self.pulse_out.eq(1)
-        with m.Else():
-            m.d.comb += self.pulse_out.eq(0)
-
-        return m
-
-class USBStreamToChannels(Elaboratable):
-    def __init__(self, max_nr_channels=2):
-        # parameters
-        self._max_nr_channels = max_nr_channels
-        self._channel_bits    = Shape.cast(range(max_nr_channels)).width
-
-        # ports
-        self.usb_stream_in       = StreamInterface()
-        self.channel_stream_out  = StreamInterface(payload_width=24, extra_fields=[("channel_no", self._channel_bits)])
-
-    def elaborate(self, platform):
-        m = Module()
-
-        out_channel_no   = Signal(self._channel_bits)
-        out_sample       = Signal(16)
-        usb_valid        = Signal()
-        usb_first        = Signal()
-        usb_payload      = Signal(8)
-        out_ready        = Signal()
-
-        m.d.comb += [
-            usb_first.eq(self.usb_stream_in.first),
-            usb_valid.eq(self.usb_stream_in.valid),
-            usb_payload.eq(self.usb_stream_in.payload),
-            out_ready.eq(self.channel_stream_out.ready),
-            self.usb_stream_in.ready.eq(out_ready),
-        ]
-
-        m.d.sync += [
-            self.channel_stream_out.valid.eq(0),
-            self.channel_stream_out.first.eq(0),
-            self.channel_stream_out.last.eq(0),
-        ]
-
-        with m.If(usb_valid & out_ready):
-            with m.FSM():
-                with m.State("B0"):
-                    with m.If(usb_first):
-                        m.d.sync += out_channel_no.eq(0)
-                    with m.Else():
-                        m.d.sync += out_channel_no.eq(out_channel_no + 1)
-
-                    m.next = "B1"
-
-                with m.State("B1"):
-                    m.d.sync += out_sample[:8].eq(usb_payload)
-                    m.next = "B2"
-
-                with m.State("B2"):
-                    m.d.sync += out_sample[8:16].eq(usb_payload)
-                    m.next = "B3"
-
-                with m.State("B3"):
-                    m.d.sync += [
-                        self.channel_stream_out.payload.eq(Cat(out_sample, usb_payload)),
-                        self.channel_stream_out.valid.eq(1),
-                        self.channel_stream_out.channel_no.eq(out_channel_no),
-                        self.channel_stream_out.first.eq(out_channel_no == 0),
-                        self.channel_stream_out.last.eq(out_channel_no == (2**self._channel_bits - 1)),
-                    ]
-                    m.next = "B0"
-
-        return m
-
-def connect_fifo_to_stream(fifo, stream, firstBit: int=None, lastBit: int=None) -> None:
-    """Connects the output of the FIFO to the of the stream. Data flows from the fifo the stream.
-       It is assumed the payload occupies the lowest significant bits
-       This function connects first/last signals if their bit numbers are given
-    """
-
-    result = [
-        stream.valid.eq(fifo.r_rdy),
-        fifo.r_en.eq(stream.ready),
-        stream.payload.eq(fifo.r_data),
-    ]
-
-    if firstBit:
-        result.append(stream.first.eq(fifo.r_data[firstBit]))
-    if lastBit:
-        result.append(stream.last.eq(fifo.r_data[lastBit]))
-
-    return result
-
-class ChannelsToUSBStream(Elaboratable):
-    def __init__(self, max_nr_channels=2, sample_width=24, max_packet_size=512):
-        assert sample_width in [16, 24, 32]
-
-        # parameters
-        self._max_nr_channels = max_nr_channels
-        self._channel_bits    = Shape.cast(range(max_nr_channels)).width
-        self._sample_width    = sample_width
-        self._max_packet_size = max_packet_size
-
-        # ports
-        self.usb_stream_out      = StreamInterface()
-        self.channel_stream_in   = StreamInterface(payload_width=self._sample_width, extra_fields=[("channel_no", self._channel_bits)])
-
-    def elaborate(self, platform):
-        m = Module()
-        m.submodules.out_fifo = out_fifo = SyncFIFO(width=8, depth=self._max_packet_size)
-
-        channel_stream  = self.channel_stream_in
-        channel_payload = Signal(self._sample_width)
-        channel_valid   = Signal()
-        channel_ready   = Signal()
-
-        m.d.comb += [
-            *connect_fifo_to_stream(out_fifo, self.usb_stream_out),
-            channel_payload.eq(channel_stream.payload),
-            channel_valid.eq(channel_stream.valid),
-            channel_stream.ready.eq(channel_ready),
-        ]
-
-        current_sample  = Signal(32 if self._sample_width > 16 else 16)
-        current_channel = Signal(self._channel_bits)
-        current_byte    = Signal(2 if self._sample_width > 16 else 1)
-
-        last_channel    = self._max_nr_channels - 1
-        num_bytes = 4
-        last_byte = num_bytes - 1
-
-        shift = 8 if self._sample_width == 24 else 0
-
-        with m.If(out_fifo.w_rdy):
-            with m.FSM() as fsm:
-                current_channel_next = (current_channel + 1)[:self._channel_bits]
-
-                with m.State("WAIT-FIRST"):
-                    # we have to accept data until we find a first channel sample
-                    m.d.comb += channel_ready.eq(1)
-                    with m.If(channel_valid & (channel_stream.channel_no == 0)):
-                        m.d.sync += [
-                            current_sample.eq(channel_payload << shift),
-                            current_channel.eq(0),
-                        ]
-                        m.next = "SEND"
-
-                with m.State("SEND"):
-                    m.d.comb += [
-                        out_fifo.w_data.eq(current_sample[0:8]),
-                        out_fifo.w_en.eq(1),
-                    ]
-                    m.d.sync += [
-                        current_byte.eq(current_byte + 1),
-                        current_sample.eq(current_sample >> 8),
-                    ]
-
-                    with m.If(current_byte == last_byte):
-                        with m.If(channel_valid):
-                            m.d.comb += channel_ready.eq(1)
-
-                            m.d.sync += current_channel.eq(current_channel_next)
-
-                            with m.If(current_channel_next == channel_stream.channel_no):
-                                m.d.sync += current_sample.eq(channel_payload << shift)
-                                m.next = "SEND"
-                            with m.Else():
-                                m.next = "FILL-ZEROS"
-
-                        with m.Else():
-                            m.next = "WAIT"
-
-                with m.State("WAIT"):
-                    with m.If(channel_valid):
-                        m.d.comb += channel_ready.eq(1)
-                        m.d.sync += [
-                            current_sample.eq(channel_payload << shift),
-                            current_channel.eq(current_channel_next),
-                        ]
-                        m.next = "SEND"
-
-                with m.State("FILL-ZEROS"):
-                    m.d.comb += [
-                        out_fifo.w_data.eq(0),
-                        out_fifo.w_en.eq(1),
-                    ]
-                    m.d.sync += current_byte.eq(current_byte + 1)
-
-                    with m.If(current_byte == last_byte):
-                        m.d.sync += current_channel.eq(current_channel + 1)
-                        with m.If(current_channel == last_channel):
-                            m.next = "WAIT-FIRST"
-        return m
+from util                   import EdgeToPulse
+from usb_stream_to_channels import USBStreamToChannels
+from channels_to_usb_stream import ChannelsToUSBStream
+from eurorack_pmod          import EurorackPmod
+from audio_to_channels      import AudioToChannels
 
 class USB2AudioInterface(Elaboratable):
     """ USB Audio Class v2 interface """
@@ -450,136 +251,10 @@ class USB2AudioInterface(Elaboratable):
         # Windows wants a stereo pair as default setting, so let's have it
         self.create_input_streaming_interface(c, nr_channels=self.NR_CHANNELS, alt_setting_nr=1, channel_config=0x3)
 
-    def add_eurorack_pmod(self, m, platform):
-
-        eurorack_pmod = [
-            Resource("eurorack_pmod", 0,
-                Subsignal("sdin1",   Pins("1",  conn=("pmod",0), dir='o')),
-                Subsignal("sdout1",  Pins("2",  conn=("pmod",0), dir='i')),
-                Subsignal("lrck",    Pins("3",  conn=("pmod",0), dir='o')),
-                Subsignal("bick",    Pins("4",  conn=("pmod",0), dir='o')),
-                Subsignal("mclk",    Pins("10", conn=("pmod",0), dir='o')),
-                Subsignal("pdn",     Pins("9",  conn=("pmod",0), dir='o')),
-                Subsignal("i2c_sda", Pins("8",  conn=("pmod",0), dir='io')),
-                Subsignal("i2c_scl", Pins("7",  conn=("pmod",0), dir='io')),
-                Attrs(IO_TYPE="LVCMOS33"),
-            )
-        ]
-
-        platform.add_resources(eurorack_pmod)
-        pmod0 = platform.request("eurorack_pmod")
-
-
-        # Verilog sources
-        vroot = os.path.join(os.path.dirname(os.path.realpath(__file__)),
-                                             "../eurorack-pmod/gateware")
-
-        platform.add_file("eurorack_pmod_defines.sv", "`define HW_R33")
-        platform.add_file("eurorack_pmod.sv", open(os.path.join(vroot, "eurorack_pmod.sv")))
-        platform.add_file("pmod_i2c_master.sv", open(os.path.join(vroot, "drivers/pmod_i2c_master.sv")))
-        platform.add_file("ak4619.sv", open(os.path.join(vroot, "drivers/ak4619.sv")))
-        platform.add_file("cal.sv", open(os.path.join(vroot, "cal/cal.sv")))
-        platform.add_file("i2c_master.sv", open(os.path.join(vroot, "external/no2misc/rtl/i2c_master.v")))
-
-        # .hex files
-        platform.add_file("cal/cal_mem_default_r33.hex",
-                          open(os.path.join(vroot, "cal/cal_mem_default_r33.hex")))
-        platform.add_file("drivers/ak4619-cfg.hex",
-                          open(os.path.join(vroot, "drivers/ak4619-cfg.hex")))
-        platform.add_file("drivers/pca9635-cfg.hex",
-                          open(os.path.join(vroot, "drivers/pca9635-cfg.hex")))
-
-        # clk_fs divider.
-        # not a true clock domain, don't create one.
-        clkdiv_fs = Signal(8)
-        self.clk_fs = clk_fs = Signal()
-        m.d.audio += clkdiv_fs.eq(clkdiv_fs+1)
-        m.d.comb += clk_fs.eq(clkdiv_fs[-1])
-
-        # eurorack-pmod global pipeline sample width
-        w = 16
-
-        self.cal_in0 = Signal(signed(w))
-        self.cal_in1 = Signal(signed(w))
-        self.cal_in2 = Signal(signed(w))
-        self.cal_in3 = Signal(signed(w))
-
-        self.cal_out0 = Signal(signed(w))
-        self.cal_out1 = Signal(signed(w))
-        self.cal_out2 = Signal(signed(w))
-        self.cal_out3 = Signal(signed(w))
-
-        self.eeprom_mfg = Signal(8)
-        self.eeprom_dev = Signal(8)
-        self.eeprom_serial = Signal(32)
-        self.jack = Signal(8)
-
-        self.sample_adc0 = Signal(signed(w))
-        self.sample_adc1 = Signal(signed(w))
-        self.sample_adc2 = Signal(signed(w))
-        self.sample_adc3 = Signal(signed(w))
-
-        self.force_dac_output = Signal(signed(w))
-
-        m.d.comb += [
-            pmod0.i2c_scl.o.eq(0),
-            pmod0.i2c_sda.o.eq(0),
-        ]
-
-        m.submodules.veurorack_pmod = Instance("eurorack_pmod",
-            # Parameters
-            p_W = w,
-
-            # Ports (clk + reset)
-            i_clk_256fs = ClockSignal("audio"),
-            i_clk_fs = clk_fs,
-            i_rst = ResetSignal("audio"),
-
-            # Pads (tristate, require different logic to hook these
-            # up to pads depending on the target platform).
-            o_i2c_scl_oe = pmod0.i2c_scl.oe,
-            i_i2c_scl_i = pmod0.i2c_scl.i,
-            o_i2c_sda_oe = pmod0.i2c_sda.oe,
-            i_i2c_sda_i = pmod0.i2c_sda.i,
-
-            # Pads (directly hooked up to pads without extra logic required)
-            o_pdn = pmod0.pdn.o,
-            o_mclk = pmod0.mclk.o,
-            o_sdin1 = pmod0.sdin1.o,
-            i_sdout1 = pmod0.sdout1.i,
-            o_lrck = pmod0.lrck.o,
-            o_bick = pmod0.bick.o,
-
-            # Ports (clock at clk_fs)
-            o_cal_in0 = self.cal_in0,
-            o_cal_in1 = self.cal_in1,
-            o_cal_in2 = self.cal_in2,
-            o_cal_in3 = self.cal_in3,
-            i_cal_out0 = self.cal_out0,
-            i_cal_out1 = self.cal_out1,
-            i_cal_out2 = self.cal_out2,
-            i_cal_out3 = self.cal_out3,
-
-            # Ports (serialized data fetched over I2C)
-            o_eeprom_mfg = self.eeprom_mfg,
-            o_eeprom_dev = self.eeprom_dev,
-            o_eeprom_serial = self.eeprom_serial,
-            o_jack = self.jack,
-
-            # Debug ports
-            o_sample_adc0 = self.sample_adc0,
-            o_sample_adc1 = self.sample_adc1,
-            o_sample_adc2 = self.sample_adc2,
-            o_sample_adc3 = self.sample_adc3,
-            i_force_dac_output = self.force_dac_output,
-        )
-
     def elaborate(self, platform):
         m = Module()
 
         m.submodules.car = platform.clock_domain_generator()
-
-        self.add_eurorack_pmod(m, platform)
 
         ulpi = platform.request(platform.default_usb_connection)
         m.submodules.usb = usb = USBDevice(bus=ulpi)
@@ -663,16 +338,6 @@ class USB2AudioInterface(Elaboratable):
             audio_clock_tick.eq(audio_clock_usb_pulse.pulse_out),
         ]
 
-        ## IDEAS
-        ## Same EdgeToPulse pattern for clk_256fs -> clk_fs strobe (in audio domain)
-        ## AsyncFIFO for clk_256fs (valid on strobe) -> usb domain stream
-        ## Warn: channel_no synchronization: test with some assumptions before integrating?
-        ## DAC side will probably be easier -- read implementation of USB -> Channel component
-        ## >>> Output channel numbers are always alternating
-        ## >>> But they still should go through some FIFOs? Origin is USB domain.
-        ## AsyncFIFO with payload for all samples (cd_audio) -> (cd_usb)
-        ## Then state machine in cd_usb to read the samples into a destination stream
-
         with m.If(audio_clock_tick):
             m.d.usb += audio_clock_counter.eq(audio_clock_counter + 1)
 
@@ -703,151 +368,18 @@ class USB2AudioInterface(Elaboratable):
         m.submodules.channels_to_usb_stream = channels_to_usb_stream = \
             DomainRenamer("usb")(ChannelsToUSBStream(self.NR_CHANNELS))
 
-
-        # Sample width used in underlying I2S driver. TODO: inherit from top-level component.
-        SW=16
-
-        # Create a strobe from the sample clock 'clk_fs` that asserts for 1 cycle
-        # per sample in the 'audio' domain. This is useful for latching our samples
-        # and hooking up to various signals in our FIFOs.
-        fs_strobe = Signal()
-        m.submodules.fs_edge = fs_edge = DomainRenamer("audio")(EdgeToPulse())
-        m.d.audio += fs_edge.edge_in.eq(self.clk_fs),
-
-        # adc_fifo contains one entry per sample strobe in the audio domain, where each entry contains
-        # a concatenated binary string of all input channels in one entry.
-
-        m.submodules.adc_fifo = adc_fifo = AsyncFIFO(width=SW*4, depth=64, w_domain="audio", r_domain="usb")
-
-        m.d.audio += [
-            # FIXME: ignoring rdy in write domain. Should be fine as write domain
-            # will always be slower than the read domain, but should be fixed.
-            adc_fifo.w_en.eq(fs_edge.pulse_out),
-            adc_fifo.w_data[    :SW*1].eq(self.cal_in0),
-            adc_fifo.w_data[SW*1:SW*2].eq(self.cal_in1),
-            adc_fifo.w_data[SW*2:SW*3].eq(self.cal_in2),
-            adc_fifo.w_data[SW*3:SW*4].eq(self.cal_in3),
-        ]
-
-        # In the USB domain, unpack samples from the adc_fifo (one big concatenated
-        # entry with samples for all channels once per sample strobe) and feed them
-        # into ChannelsToUSBStream with one entry per channel, i.e 1 -> 4 entries
-        # per sample strobe in the audio domain.
-
-        # Storage for samples in the USB domain as we send them to the channel stream.
-        adc_latched = Signal(SW*4)
-
-        with m.FSM(domain="usb") as fsm:
-
-            with m.State('WAIT'):
-                m.d.usb += channels_to_usb_stream.channel_stream_in.valid.eq(0),
-                with m.If(adc_fifo.r_rdy):
-                    m.d.usb += adc_fifo.r_en.eq(1)
-                    m.next = 'LATCH'
-
-            with m.State('LATCH'):
-                m.d.usb += [
-                    adc_fifo.r_en.eq(0),
-                    adc_latched.eq(adc_fifo.r_data)
-                ]
-                m.next = 'CH0'
-
-            def generate_channel_states(channel, next_state_name):
-                with m.State(f'CH{channel}'):
-                    m.d.usb += [
-                        # FIXME: currently filling bottom 8 bits with zeroes for 16bit -> 24bit
-                        # sample conversion. Better to just switch native rate of I2S driver.
-                        channels_to_usb_stream.channel_stream_in.payload.eq(
-                            Cat(Const(0, 8), adc_latched[channel*SW:(channel+1)*SW])),
-                        channels_to_usb_stream.channel_stream_in.channel_no.eq(channel),
-                        channels_to_usb_stream.channel_stream_in.valid.eq(1),
-                    ]
-                    m.next = f'CH{channel}-SEND'
-                with m.State(f'CH{channel}-SEND'):
-                    with m.If(channels_to_usb_stream.channel_stream_in.ready):
-                        m.d.usb += channels_to_usb_stream.channel_stream_in.valid.eq(0)
-                        m.next = next_state_name
-
-            generate_channel_states(0, 'CH1')
-            generate_channel_states(1, 'CH2')
-            generate_channel_states(2, 'CH3')
-            generate_channel_states(3, 'WAIT')
-
-        m.submodules.dac_fifo0 = dac_fifo0 = AsyncFIFO(width=16, depth=64, w_domain="usb", r_domain="audio")
-        m.submodules.dac_fifo1 = dac_fifo1 = AsyncFIFO(width=16, depth=64, w_domain="usb", r_domain="audio")
-        m.submodules.dac_fifo2 = dac_fifo2 = AsyncFIFO(width=16, depth=64, w_domain="usb", r_domain="audio")
-        m.submodules.dac_fifo3 = dac_fifo3 = AsyncFIFO(width=16, depth=64, w_domain="usb", r_domain="audio")
-
-        m.d.comb += [
-            dac_fifo0.w_data.eq(usb_to_channel_stream.channel_stream_out.payload[8:]),
-            dac_fifo0.w_en.eq((usb_to_channel_stream.channel_stream_out.channel_no == 0) &
-                              usb_to_channel_stream.channel_stream_out.valid),
-            dac_fifo1.w_data.eq(usb_to_channel_stream.channel_stream_out.payload[8:]),
-            dac_fifo1.w_en.eq((usb_to_channel_stream.channel_stream_out.channel_no == 1) &
-                              usb_to_channel_stream.channel_stream_out.valid),
-            dac_fifo2.w_data.eq(usb_to_channel_stream.channel_stream_out.payload[8:]),
-            dac_fifo2.w_en.eq((usb_to_channel_stream.channel_stream_out.channel_no == 2) &
-                              usb_to_channel_stream.channel_stream_out.valid),
-            dac_fifo3.w_data.eq(usb_to_channel_stream.channel_stream_out.payload[8:]),
-            dac_fifo3.w_en.eq((usb_to_channel_stream.channel_stream_out.channel_no == 3) &
-                              usb_to_channel_stream.channel_stream_out.valid),
-            usb_to_channel_stream.channel_stream_out.ready.eq(
-                dac_fifo0.w_rdy | dac_fifo1.w_rdy | dac_fifo2.w_rdy | dac_fifo3.w_rdy),
-        ]
-
-        with m.FSM(domain="audio") as fsm:
-            with m.State('READ'):
-                with m.If(fs_edge.pulse_out & dac_fifo0.r_rdy):
-                    m.d.audio += dac_fifo0.r_en.eq(1)
-                    m.next = 'SEND'
-            with m.State('SEND'):
-                m.d.audio += [
-                    dac_fifo0.r_en.eq(0),
-                    self.cal_out0.eq(dac_fifo0.r_data),
-                ]
-                m.next = 'READ'
-
-        with m.FSM(domain="audio") as fsm:
-            with m.State('READ'):
-                with m.If(fs_edge.pulse_out & dac_fifo1.r_rdy):
-                    m.d.audio += dac_fifo1.r_en.eq(1)
-                    m.next = 'SEND'
-            with m.State('SEND'):
-                m.d.audio += [
-                    dac_fifo1.r_en.eq(0),
-                    self.cal_out1.eq(dac_fifo1.r_data),
-                ]
-                m.next = 'READ'
-
-        with m.FSM(domain="audio") as fsm:
-            with m.State('READ'):
-                with m.If(fs_edge.pulse_out & dac_fifo2.r_rdy):
-                    m.d.audio += dac_fifo2.r_en.eq(1)
-                    m.next = 'SEND'
-            with m.State('SEND'):
-                m.d.audio += [
-                    dac_fifo2.r_en.eq(0),
-                    self.cal_out2.eq(dac_fifo2.r_data),
-                ]
-                m.next = 'READ'
-
-        with m.FSM(domain="audio") as fsm:
-            with m.State('READ'):
-                with m.If(fs_edge.pulse_out & dac_fifo3.r_rdy):
-                    m.d.audio += dac_fifo3.r_en.eq(1)
-                    m.next = 'SEND'
-            with m.State('SEND'):
-                m.d.audio += [
-                    dac_fifo3.r_en.eq(0),
-                    self.cal_out3.eq(dac_fifo3.r_data),
-                ]
-                m.next = 'READ'
-
         m.d.comb += [
             # Wire USB <-> stream synchronizers
             usb_to_channel_stream.usb_stream_in.stream_eq(ep1_out.stream),
             ep2_in.stream.stream_eq(channels_to_usb_stream.usb_stream_out),
         ]
+
+        m.submodules.eurorack_pmod = eurorack_pmod = EurorackPmod()
+
+        m.submodules.audio_to_channels = AudioToChannels(
+                eurorack_pmod,
+                to_usb_stream=channels_to_usb_stream.channel_stream_in,
+                from_usb_stream=usb_to_channel_stream.channel_stream_out)
 
         return m
 
