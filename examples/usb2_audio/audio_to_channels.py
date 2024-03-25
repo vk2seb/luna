@@ -24,13 +24,22 @@ class AudioToChannels(Elaboratable):
 
         eurorack_pmod = self.eurorack_pmod
 
-        # Sample width used in underlying I2S driver.
-        SW=eurorack_pmod.width
+        # Sample widths
+        SW      = eurorack_pmod.width       # Sample width used in underlying I2S driver.
+        SW_USB  = self.to_usb.payload.width # Sample width used for USB transfers.
+        N_ZFILL = SW_USB - SW               # Zero padding if SW < SW_USB
 
-        # adc_fifo contains one entry per sample strobe in the audio domain, where each entry contains
-        # a concatenated binary string of all input channels in one entry.
+        assert(N_ZFILL >= 0)
+
+        #
+        # INPUT SIDE
+        # eurorack-pmod calibrated INPUT samples -> USB Channel stream -> HOST
+        #
 
         m.submodules.adc_fifo = adc_fifo = AsyncFIFO(width=SW*4, depth=64, w_domain="audio", r_domain="usb")
+
+        # (audio domain) on every sample strobe, latch and write all channels concatenated into one entry
+        # of adc_fifo.
 
         m.d.audio += [
             # FIXME: ignoring rdy in write domain. Should be fine as write domain
@@ -42,7 +51,7 @@ class AudioToChannels(Elaboratable):
             adc_fifo.w_data[SW*3:SW*4].eq(eurorack_pmod.cal_in3),
         ]
 
-        # In the USB domain, unpack samples from the adc_fifo (one big concatenated
+        # (usb domain) unpack samples from the adc_fifo (one big concatenated
         # entry with samples for all channels once per sample strobe) and feed them
         # into ChannelsToUSBStream with one entry per channel, i.e 1 -> 4 entries
         # per sample strobe in the audio domain.
@@ -68,10 +77,10 @@ class AudioToChannels(Elaboratable):
             def generate_channel_states(channel, next_state_name):
                 with m.State(f'CH{channel}'):
                     m.d.usb += [
-                        # FIXME: currently filling bottom 8 bits with zeroes for 16bit -> 24bit
+                        # FIXME: currently filling bottom bits with zeroes for SW bit -> SW_USB bit
                         # sample conversion. Better to just switch native rate of I2S driver.
                         self.to_usb.payload.eq(
-                            Cat(Const(0, 8), adc_latched[channel*SW:(channel+1)*SW])),
+                            Cat(Const(0, N_ZFILL), adc_latched[channel*SW:(channel+1)*SW])),
                         self.to_usb.channel_no.eq(channel),
                         self.to_usb.valid.eq(1),
                     ]
@@ -86,74 +95,41 @@ class AudioToChannels(Elaboratable):
             generate_channel_states(2, 'CH3')
             generate_channel_states(3, 'WAIT')
 
-        m.submodules.dac_fifo0 = dac_fifo0 = AsyncFIFO(width=16, depth=64, w_domain="usb", r_domain="audio")
-        m.submodules.dac_fifo1 = dac_fifo1 = AsyncFIFO(width=16, depth=64, w_domain="usb", r_domain="audio")
-        m.submodules.dac_fifo2 = dac_fifo2 = AsyncFIFO(width=16, depth=64, w_domain="usb", r_domain="audio")
-        m.submodules.dac_fifo3 = dac_fifo3 = AsyncFIFO(width=16, depth=64, w_domain="usb", r_domain="audio")
+        #
+        # OUTPUT SIDE
+        # HOST -> USB Channel stream -> eurorack-pmod calibrated OUTPUT samples.
+        #
 
-        m.d.comb += [
-            dac_fifo0.w_data.eq(self.from_usb.payload[8:]),
-            dac_fifo0.w_en.eq((self.from_usb.channel_no == 0) &
-                              self.from_usb.valid),
-            dac_fifo1.w_data.eq(self.from_usb.payload[8:]),
-            dac_fifo1.w_en.eq((self.from_usb.channel_no == 1) &
-                              self.from_usb.valid),
-            dac_fifo2.w_data.eq(self.from_usb.payload[8:]),
-            dac_fifo2.w_en.eq((self.from_usb.channel_no == 2) &
-                              self.from_usb.valid),
-            dac_fifo3.w_data.eq(self.from_usb.payload[8:]),
-            dac_fifo3.w_en.eq((self.from_usb.channel_no == 3) &
-                              self.from_usb.valid),
-            self.from_usb.ready.eq(
-                dac_fifo0.w_rdy | dac_fifo1.w_rdy | dac_fifo2.w_rdy | dac_fifo3.w_rdy),
-        ]
+        for n, output in zip(range(4), [eurorack_pmod.cal_out0, eurorack_pmod.cal_out1,
+                                        eurorack_pmod.cal_out2, eurorack_pmod.cal_out3]):
 
-        with m.FSM(domain="audio") as fsm:
-            with m.State('READ'):
-                with m.If(eurorack_pmod.fs_strobe & dac_fifo0.r_rdy):
-                    m.d.audio += dac_fifo0.r_en.eq(1)
-                    m.next = 'SEND'
-            with m.State('SEND'):
-                m.d.audio += [
-                    dac_fifo0.r_en.eq(0),
-                    eurorack_pmod.cal_out0.eq(dac_fifo0.r_data),
-                ]
-                m.next = 'READ'
+            # FIXME: we shouldn't need one FIFO per channel
+            fifo = AsyncFIFO(width=SW, depth=64, w_domain="usb", r_domain="audio")
+            setattr(m.submodules, f'dac_fifo{n}', fifo)
 
-        with m.FSM(domain="audio") as fsm:
-            with m.State('READ'):
-                with m.If(eurorack_pmod.fs_strobe & dac_fifo1.r_rdy):
-                    m.d.audio += dac_fifo1.r_en.eq(1)
-                    m.next = 'SEND'
-            with m.State('SEND'):
-                m.d.audio += [
-                    dac_fifo1.r_en.eq(0),
-                    eurorack_pmod.cal_out1.eq(dac_fifo1.r_data),
-                ]
-                m.next = 'READ'
+            # (usb domain) if the channel_no matches, demux it into the correct channel FIFO
+            m.d.comb += [
+                fifo.w_data.eq(self.from_usb.payload[N_ZFILL:]),
+                fifo.w_en.eq((self.from_usb.channel_no == n) &
+                             self.from_usb.valid),
+            ]
 
-        with m.FSM(domain="audio") as fsm:
-            with m.State('READ'):
-                with m.If(eurorack_pmod.fs_strobe & dac_fifo2.r_rdy):
-                    m.d.audio += dac_fifo2.r_en.eq(1)
-                    m.next = 'SEND'
-            with m.State('SEND'):
-                m.d.audio += [
-                    dac_fifo2.r_en.eq(0),
-                    eurorack_pmod.cal_out2.eq(dac_fifo2.r_data),
-                ]
-                m.next = 'READ'
+            # (audio domain) once fs_strobe hits, write the next pending sample to eurorack_pmod.
+            with m.FSM(domain="audio") as fsm:
+                with m.State('READ'):
+                    with m.If(eurorack_pmod.fs_strobe & fifo.r_rdy):
+                        m.d.audio += fifo.r_en.eq(1)
+                        m.next = 'SEND'
+                with m.State('SEND'):
+                    m.d.audio += [
+                        fifo.r_en.eq(0),
+                        output.eq(fifo.r_data),
+                    ]
+                    m.next = 'READ'
 
-        with m.FSM(domain="audio") as fsm:
-            with m.State('READ'):
-                with m.If(eurorack_pmod.fs_strobe & dac_fifo3.r_rdy):
-                    m.d.audio += dac_fifo3.r_en.eq(1)
-                    m.next = 'SEND'
-            with m.State('SEND'):
-                m.d.audio += [
-                    dac_fifo3.r_en.eq(0),
-                    eurorack_pmod.cal_out3.eq(dac_fifo3.r_data),
-                ]
-                m.next = 'READ'
+        # FIXME: make this less lenient
+        m.d.comb += self.from_usb.ready.eq(
+            m.submodules.dac_fifo0.w_rdy | m.submodules.dac_fifo1.w_rdy |
+            m.submodules.dac_fifo2.w_rdy | m.submodules.dac_fifo3.w_rdy)
 
         return m
