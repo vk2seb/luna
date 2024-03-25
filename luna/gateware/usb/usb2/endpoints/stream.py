@@ -220,10 +220,10 @@ class USBMultibyteStreamInEndpoint(Elaboratable):
 
                     # ... if we have bytes left to send, move to the next one.
                     with m.If(bytes_to_send > 0):
-                        m.d.usb += [
-                            bytes_to_send .eq(bytes_to_send - 1),
-                            data_shift    .eq(data_shift[8:]),
-                        ]
+                        m.d.usb += bytes_to_send.eq(bytes_to_send - 1)
+
+                        if (data_shift.shape().width > 8):
+                            m.d.usb += data_shift.eq(data_shift[8:])
 
                     # Otherwise, complete the frame.
                     with m.Else():
@@ -416,4 +416,3 @@ class USBStreamOutEndpoint(Elaboratable):
 
 
         return m
-

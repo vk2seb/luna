@@ -4,7 +4,7 @@
 # Copyright (c) 2020 Great Scott Gadgets <info@greatscottgadgets.com>
 # SPDX-License-Identifier: BSD-3-Clause
 
-""" Contains the gatware module necessary to interpret and generate low-level USB packets. """
+""" Contains the gatware module necessary to interpret and generate low-level USB device packets. """
 
 
 import operator
@@ -222,7 +222,6 @@ class USBTokenDetector(Elaboratable):
             If true, this detector will only report events for the address supplied in the address[] field.
     """
 
-    SOF_PID      = 0b0101
     TOKEN_SUFFIX =   0b01
 
     def __init__(self, *, utmi, filter_by_address=True, domain_clock=60e6, fs_only=False):
@@ -240,7 +239,7 @@ class USBTokenDetector(Elaboratable):
 
 
     @staticmethod
-    def _generate_crc_for_token(token):
+    def generate_crc_for_token(token):
         """ Generates a 5-bit signal equivalent to the CRC check for the provided token packet. """
 
         def xor_bits(*indices):
@@ -345,7 +344,7 @@ class USBTokenDetector(Elaboratable):
                 # Once we've just gotten the second core byte of our token,
                 # we can validate our checksum and handle it.
                 with m.Elif(self.utmi.rx_valid):
-                    expected_crc = self._generate_crc_for_token(
+                    expected_crc = self.generate_crc_for_token(
                         Cat(token_data[0:8], self.utmi.rx_data[0:3]))
 
                     # If the token has a valid CRC, capture it...
@@ -370,7 +369,7 @@ class USBTokenDetector(Elaboratable):
                     # Special case: if this is a SOF PID, we'll extract
                     # the frame number from this, rather than our typical
                     # token fields.
-                    with m.If(current_pid == self.SOF_PID):
+                    with m.If(current_pid == USBPacketID.SOF):
                         m.d.usb += [
                             self.interface.frame      .eq(token_data),
                             self.interface.new_frame  .eq(1),
