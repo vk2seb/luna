@@ -16,23 +16,23 @@ from ..test.utils import LunaGatewareTestCase, sync_test_case
 
 
 class HyperBusPHY(Record):
-    """ Record representing a 16-bit HyperBus interface for use with a 2:1 PHY module. """
+    """ Record representing a 32-bit HyperBus interface for use with a 4:1 PHY module. """
 
     def __init__(self):
         super().__init__([
-            ('clk_en', 1, DIR_FANOUT),
+            ('clk_en', 2, DIR_FANOUT),
             ('dq', [
-                ('i', 16, DIR_FANIN),
-                ('o', 16, DIR_FANOUT),
+                ('i', 32, DIR_FANIN),
+                ('o', 32, DIR_FANOUT),
                 ('e', 1,  DIR_FANOUT),
             ]),
             ('rwds', [
-                ('i', 2,  DIR_FANIN),
-                ('o', 2,  DIR_FANOUT),
+                ('i', 4,  DIR_FANIN),
+                ('o', 4,  DIR_FANOUT),
                 ('e', 1,  DIR_FANOUT),
             ]),
             ('cs',     1, DIR_FANOUT),
-            ('reset',  1, DIR_FANOUT)
+            ('reset',  1, DIR_FANOUT),
         ])
 
 
@@ -51,16 +51,16 @@ class HyperRAMInterface(Elaboratable):
                                [This added duration allows other clock domains to easily perform requests.]
         I: final_word       -- Flag that indicates the current word is the last word of the transaction.
 
-        O: read_data[16]    -- word that holds the 16 bits most recently read from the PSRAM
-        I: write_data[16]   -- word that accepts the data to output during this transaction
+        O: read_data[32]    -- word that holds the 32 bits most recently read from the PSRAM
+        I: write_data[32]   -- word that accepts the data to output during this transaction
 
         O: idle             -- High whenever the transmitter is idle (and thus we can start a new piece of data.)
         O: read_ready       -- Strobe that indicates when new data is ready for reading
         O: write_ready      -- Strobe that indicates `write_data` has been latched and is ready for new data
     """
 
-    LOW_LATENCY_CLOCKS  = 7
-    HIGH_LATENCY_CLOCKS = 14
+    LOW_LATENCY_CLOCKS  = 3
+    HIGH_LATENCY_CLOCKS = 5
 
     def __init__(self, *, phy):
         """
@@ -88,8 +88,8 @@ class HyperRAMInterface(Elaboratable):
         self.write_ready      = Signal()
 
         # Data signals.
-        self.read_data        = Signal(16)
-        self.write_data       = Signal(16)
+        self.read_data        = Signal(32)
+        self.write_data       = Signal(32)
 
         self.clk = Signal()
 
@@ -117,10 +117,9 @@ class HyperRAMInterface(Elaboratable):
         # and the relevant data stages.
         latency_clocks_remaining  = Signal(range(0, self.HIGH_LATENCY_CLOCKS + 1))
 
-        # Store last edge values of RWDS and DQ lines.
-        # This is used to handle clock inversion cases.
-        last_half_rwds = Signal()
-        last_half_dq   = Signal(len(self.phy.dq.i)//2)
+        # Store last values of DQ lines.
+        # This is used to handle different data alignment cases.
+        last_dq   = Signal.like(self.phy.dq.i)
 
         #
         # Core operation FSM.
@@ -128,7 +127,7 @@ class HyperRAMInterface(Elaboratable):
 
         # Provide defaults for our control/status signals.
         m.d.sync += [
-            self.phy.clk_en     .eq(1),
+            self.phy.clk_en     .eq(0b11),
             self.phy.cs         .eq(1),
             self.phy.rwds.e     .eq(0),
             self.phy.dq.e       .eq(0),
@@ -191,23 +190,17 @@ class HyperRAMInterface(Elaboratable):
 
             # SHIFT_COMMANDx -- shift each of our command words out
             with m.State('SHIFT_COMMAND0'):
-                # Output our first byte of our command.
+                # Output the first 32 bits of our command.
                 m.d.sync += [
-                    self.phy.dq.o.eq(ca[32:48]),
+                    self.phy.dq.o.eq(ca[16:48]),
                     self.phy.dq.e.eq(1)
                 ]
                 m.next = 'SHIFT_COMMAND1'
 
             with m.State('SHIFT_COMMAND1'):
+                # Output the remaining 16 bits of our command.
                 m.d.sync += [
-                    self.phy.dq.o.eq(ca[16:32]),
-                    self.phy.dq.e.eq(1)
-                ]
-                m.next = 'SHIFT_COMMAND2'
-
-            with m.State('SHIFT_COMMAND2'):
-                m.d.sync += [
-                    self.phy.dq.o.eq(ca[0:16]),
+                    self.phy.dq.o.eq(Cat(Const(0, 16), ca[0:16])),
                     self.phy.dq.e.eq(1)
                 ]
 
@@ -225,9 +218,9 @@ class HyperRAMInterface(Elaboratable):
                     # FIXME: our HyperRAM part has a fixed latency, but we could need to detect 
                     # different variants from the configuration register in the future.
                     with m.If(extra_latency | 1):
-                        m.d.sync += latency_clocks_remaining.eq(self.HIGH_LATENCY_CLOCKS-2)
+                        m.d.sync += latency_clocks_remaining.eq(self.HIGH_LATENCY_CLOCKS)
                     with m.Else():
-                        m.d.sync += latency_clocks_remaining.eq(self.LOW_LATENCY_CLOCKS-2)
+                        m.d.sync += latency_clocks_remaining.eq(self.LOW_LATENCY_CLOCKS)
 
 
             # HANDLE_LATENCY -- applies clock cycles until our latency period is over.
@@ -246,33 +239,67 @@ class HyperRAMInterface(Elaboratable):
 
                 # Store data sampled in last edge.
                 m.d.sync += [
-                    last_half_rwds .eq(self.phy.rwds.i[0]),
-                    last_half_dq   .eq(self.phy.dq.i[:8])
+                    last_dq   .eq(self.phy.dq.i)
                 ]
 
                 # If RWDS has changed, the host has just sent us new data.
                 # Sample it, and indicate that we now have a valid piece of new data.
-                with m.If(self.phy.rwds.i == 0b10):
-                    m.d.comb += [
-                        self.read_data     .eq(self.phy.dq.i),
-                        self.read_ready    .eq(1),
-                    ]
+                with m.Switch(self.phy.rwds.i):
+                    with m.Case(0b1010):
+                        m.d.comb += [
+                            self.read_data     .eq(self.phy.dq.i),
+                            self.read_ready    .eq(1),
+                        ]
 
-                    # If our controller is done with the transaction, end it.
-                    with m.If(self.final_word):
-                        m.next = 'RECOVERY'
+                        # If our controller is done with the transaction, end it.
+                        with m.If(self.final_word):
+                            m.next = 'RECOVERY'
 
-                # Manage clock inversion: the data is divided between the current cycle 
-                # and the preceding one.
-                with m.Elif(Cat(self.phy.rwds.i[1], last_half_rwds) == 0b10):
-                    m.d.comb += [
-                        self.read_data     .eq(Cat(self.phy.dq.i[8:], last_half_dq)),
-                        self.read_ready    .eq(1),
-                    ]
+                    with m.Case(0b0101):
+                        m.next = 'READ_DATA_SHIFT1'
 
-                    # If our controller is done with the transaction, end it.
-                    with m.If(self.final_word):
-                        m.next = 'RECOVERY'
+                    with m.Case(0b0010):
+                        m.next = 'READ_DATA_SHIFT2'
+
+                    with m.Case(0b0001):
+                        m.next = 'READ_DATA_SHIFT3'
+
+            with m.State('READ_DATA_SHIFT1'):
+                m.d.sync += last_dq.eq(self.phy.dq.i)
+
+                m.d.comb += [
+                    self.read_data     .eq(Cat(self.phy.dq.i[24:32], last_dq[0:24])),
+                    self.read_ready    .eq(1),
+                ]
+
+                # If our controller is done with the transaction, end it.
+                with m.If(self.final_word):
+                    m.next = 'RECOVERY'
+
+            with m.State('READ_DATA_SHIFT2'):
+                m.d.sync += last_dq.eq(self.phy.dq.i)
+
+                m.d.comb += [
+                    self.read_data     .eq(Cat(self.phy.dq.i[16:32], last_dq[0:16])),
+                    self.read_ready    .eq(1),
+                ]
+
+                # If our controller is done with the transaction, end it.
+                with m.If(self.final_word):
+                    m.next = 'RECOVERY'
+
+            with m.State('READ_DATA_SHIFT3'):
+                m.d.sync += last_dq.eq(self.phy.dq.i)
+
+                m.d.comb += [
+                    self.read_data     .eq(Cat(self.phy.dq.i[8:32], last_dq[0:8])),
+                    self.read_ready    .eq(1),
+                ]
+
+                # If our controller is done with the transaction, end it.
+                with m.If(self.final_word):
+                    m.next = 'RECOVERY'
+
 
             # WRITE_DATA -- write a word to the PSRAM
             with m.State("WRITE_DATA"):
@@ -294,11 +321,15 @@ class HyperRAMInterface(Elaboratable):
 
             # RECOVERY state: wait for the required period of time before a new transaction
             with m.State('RECOVERY'):
+                with m.If(~is_read):
+                    # Data output enable needs to be held a bit longer
+                    # otherwise the final byte isn't reliably output.
+                    m.d.sync += self.phy.dq.e.eq(1)
+
                 m.d.sync += [
-                    self.phy.cs     .eq(0),
+                    self.phy.cs .eq(0),
                     self.phy.clk_en .eq(0),
-                    last_half_rwds  .eq(0),
-                    last_half_dq    .eq(0),
+                    last_dq    .eq(0),
 
                 ]
 
@@ -325,7 +356,7 @@ class TestHyperRAMInterface(LunaGatewareTestCase):
 
         for _ in range(times):
             yield
-            self.assertEqual((yield self.ram_signals.clk_en), 1)
+            self.assertEqual((yield self.ram_signals.clk_en), 0b11)
 
 
     @sync_test_case
@@ -366,15 +397,13 @@ class TestHyperRAMInterface(LunaGatewareTestCase):
         yield
         yield
         self.assertEqual((yield self.ram_signals.cs),       1)
-        self.assertEqual((yield self.ram_signals.clk_en),   1)
+        self.assertEqual((yield self.ram_signals.clk_en),   0b11)
         self.assertEqual((yield self.ram_signals.dq.e),     1)
-        self.assertEqual((yield self.ram_signals.dq.o),  0x6017)
+        self.assertEqual((yield self.ram_signals.dq.o),  0x6017799B)
 
         # This should continue until we've shifted out a full command.
         yield
-        self.assertEqual((yield self.ram_signals.dq.o),  0x799B)
-        yield
-        self.assertEqual((yield self.ram_signals.dq.o),  0x0005)
+        self.assertEqual((yield self.ram_signals.dq.o),  0x00050000)
 
         # Check that we've been driving our output this whole time,
         # and haven't been driving RWDS.
@@ -427,15 +456,13 @@ class TestHyperRAMInterface(LunaGatewareTestCase):
         yield
         yield
         self.assertEqual((yield self.ram_signals.cs),         1)
-        self.assertEqual((yield self.ram_signals.clk_en),     1)
+        self.assertEqual((yield self.ram_signals.clk_en),     0b11)
         self.assertEqual((yield self.ram_signals.dq.e),       1)
-        self.assertEqual((yield self.ram_signals.dq.o),  0xe017)
+        self.assertEqual((yield self.ram_signals.dq.o),  0xe017799B)
 
         # This should continue until we've shifted out a full command.
         yield
-        self.assertEqual((yield self.ram_signals.dq.o),  0x799B)
-        yield
-        self.assertEqual((yield self.ram_signals.dq.o),  0x0005)
+        self.assertEqual((yield self.ram_signals.dq.o),  0x00050000)
 
         # Check that we've been driving our output this whole time,
         # and haven't been driving RWDS.
@@ -448,25 +475,25 @@ class TestHyperRAMInterface(LunaGatewareTestCase):
         yield
         self.assertEqual((yield self.ram_signals.dq.e),    0)
         self.assertEqual((yield self.ram_signals.rwds.e),  0)
-        self.assertEqual((yield self.ram_signals.clk_en),  1)
+        self.assertEqual((yield self.ram_signals.clk_en),  0b11)
 
         # By this point, the RAM will drive RWDS low.
         yield self.ram_signals.rwds.i.eq(0)
 
         # Ensure the clock still ticking...
         yield
-        self.assertEqual((yield self.ram_signals.clk_en),    1)
+        self.assertEqual((yield self.ram_signals.clk_en),    0b11)
 
         # ... and remains so for the remainder of the latency period.
-        yield from self.assert_clock_pulses(14)
+        yield from self.assert_clock_pulses(5)
 
         # Now, shift in a pair of data words.
-        yield self.ram_signals.dq.i.eq(0xCAFE)
-        yield self.ram_signals.rwds.i.eq(0b10)
+        yield self.ram_signals.dq.i.eq(0xCAFEF00D)
+        yield self.ram_signals.rwds.i.eq(0b1010)
         yield
 
         # Once this finished, we should have a result on our data out.
-        self.assertEqual((yield self.dut.read_data),      0xCAFE)
+        self.assertEqual((yield self.dut.read_data),      0xCAFEF00D)
         self.assertEqual((yield self.dut.read_ready    ), 1)
 
         yield
@@ -497,18 +524,32 @@ class HyperRAMPHY(Elaboratable):
         m = Module()
 
         m.submodules += [
-            FFSynchronizer(self.phy.cs,     self.bus.cs.o,    stages=3),
             FFSynchronizer(self.phy.rwds.e, self.bus.rwds.oe, stages=3),
             FFSynchronizer(self.phy.dq.e,   self.bus.dq.oe,   stages=3),
+        ]
+
+        # CS
+        clk_out = Signal()
+        m.submodules += [
+            Instance("ODDRX2F",
+                i_D0=~self.phy.cs,
+                i_D1=~self.phy.cs,
+                i_D2=~self.phy.cs,
+                i_D3=~self.phy.cs,
+                i_SCLK=ClockSignal(),
+                i_ECLK=ClockSignal("fast"),
+                i_RST=ResetSignal(),
+                o_Q=self.bus.cs.io,
+            ),
         ]
 
         # Clock
         clk_out = Signal()
         m.submodules += [
             Instance("ODDRX2F",
-                i_D0=self.phy.clk_en,
-                i_D1=self.phy.clk_en,
-                i_D2=0,
+                i_D0=self.phy.clk_en[1],
+                i_D1=0,
+                i_D2=self.phy.clk_en[0],
                 i_D3=0,
                 i_SCLK=ClockSignal(),
                 i_ECLK=ClockSignal("fast"),
@@ -526,9 +567,9 @@ class HyperRAMPHY(Elaboratable):
         # RWDS out
         m.submodules += [
             Instance("ODDRX2F",
-                i_D0=self.phy.rwds.o[1],
-                i_D1=self.phy.rwds.o[1],
-                i_D2=self.phy.rwds.o[0],
+                i_D0=self.phy.rwds.o[3],
+                i_D1=self.phy.rwds.o[2],
+                i_D2=self.phy.rwds.o[1],
                 i_D3=self.phy.rwds.o[0],
                 i_SCLK=ClockSignal(),
                 i_ECLK=ClockSignal("fast"),
@@ -551,8 +592,10 @@ class HyperRAMPHY(Elaboratable):
                 i_SCLK=ClockSignal(),
                 i_ECLK=ClockSignal("fast"),
                 i_RST=ResetSignal(),
-                o_Q0=self.phy.rwds.i[1],
-                o_Q2=self.phy.rwds.i[0],
+                o_Q0=self.phy.rwds.i[3],
+                o_Q1=self.phy.rwds.i[2],
+                o_Q2=self.phy.rwds.i[1],
+                o_Q3=self.phy.rwds.i[0],
             ),
         ]
 
@@ -561,9 +604,9 @@ class HyperRAMPHY(Elaboratable):
             # Out
             m.submodules += [
                 Instance("ODDRX2F",
-                    i_D0=self.phy.dq.o[i+8],
-                    i_D1=self.phy.dq.o[i+8],
-                    i_D2=self.phy.dq.o[i],
+                    i_D0=self.phy.dq.o[i+24],
+                    i_D1=self.phy.dq.o[i+16],
+                    i_D2=self.phy.dq.o[i+8],
                     i_D3=self.phy.dq.o[i],
                     i_SCLK=ClockSignal(),
                     i_ECLK=ClockSignal("fast"),
@@ -586,8 +629,10 @@ class HyperRAMPHY(Elaboratable):
                     i_SCLK=ClockSignal(),
                     i_ECLK=ClockSignal("fast"),
                     i_RST=ResetSignal(),
-                    o_Q0=self.phy.dq.i[i+8],
-                    o_Q2=self.phy.dq.i[i],
+                    o_Q0=self.phy.dq.i[i+24],
+                    o_Q1=self.phy.dq.i[i+16],
+                    o_Q2=self.phy.dq.i[i+8],
+                    o_Q3=self.phy.dq.i[i],
                 ),
             ]
 

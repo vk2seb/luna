@@ -37,7 +37,12 @@ class HyperRAMDiagnostic(Elaboratable):
         m = Module()
 
         # Generate our clock domains.
-        clocking = platform.clock_domain_generator()
+        clock_frequencies = {
+            "fast": 120,
+            "sync": 60,
+            "usb": 60,
+        }
+        clocking = platform.clock_domain_generator(clock_frequencies=clock_frequencies)
         m.submodules.clocking = clocking
 
         # Create a set of registers...
@@ -47,16 +52,17 @@ class HyperRAMDiagnostic(Elaboratable):
         #
         # HyperRAM test connections.
         #
-        ram_bus = platform.request('ram')
+        ram_bus = platform.request('ram', dir={'cs': '-'})
         psram_phy = HyperRAMPHY(bus=ram_bus)
         psram = HyperRAMInterface(phy=psram_phy.phy)
         m.submodules += [psram_phy, psram]
 
+
         psram_address = registers.add_register(REGISTER_RAM_ADDR)
         read_length   = registers.add_register(REGISTER_RAM_READ_LENGTH, reset=1)
 
-        m.submodules.read_fifo  = read_fifo  = SyncFIFO(width=16, depth=32)
-        m.submodules.write_fifo = write_fifo = SyncFIFO(width=16, depth=32)
+        m.submodules.read_fifo  = read_fifo  = SyncFIFO(width=32, depth=32)
+        m.submodules.write_fifo = write_fifo = SyncFIFO(width=32, depth=32)
         registers.add_sfr(REGISTER_RAM_FIFO,
             read=read_fifo.r_data,
             read_strobe=read_fifo.r_en,
@@ -135,7 +141,7 @@ if __name__ == "__main__":
         dut.registers.register_write(REGISTER_RAM_ADDR, addr)
         dut.registers.register_read(REGISTER_RAM_START)
         time.sleep(0.1)
-        return dut.registers.register_read(REGISTER_RAM_FIFO)
+        return dut.registers.register_read(REGISTER_RAM_FIFO) >> 16
 
     def test_id_read():
         return read_hyperram_register(0x0) in (0x0c81, 0x0c86)
@@ -146,7 +152,7 @@ if __name__ == "__main__":
     def test_mem_readback():
         dut.registers.register_write(REGISTER_RAM_REGISTER_SPACE, 0)
 
-        data = [random.randint(0, int(2**16)) for _ in range(10)]
+        data = [random.randint(0, int(2**32)) for _ in range(10)]
 
         # Fill write FIFO.
         for d in data:
