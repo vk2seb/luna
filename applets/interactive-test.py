@@ -16,13 +16,13 @@ from luna.gateware.utils.cdc          import synchronize
 from luna.gateware.architecture.car   import LunaECP5DomainGenerator
 from luna.gateware.interface.jtag     import JTAGRegisterInterface
 from luna.gateware.interface.ulpi     import ULPIRegisterWindow
-from luna.gateware.interface.psram    import HyperRAMPHY, HyperRAMInterface
+from luna.gateware.interface.psram    import HyperRAMGenericPHY, HyperRAMGenericInterface
 
 from apollo_fpga.support.selftest          import ApolloSelfTestCase, named_test
 
 
 CLOCK_FREQUENCIES = {
-    "fast": 60,
+    "fast": 120,
     "sync": 60,
     "usb":  60
 }
@@ -114,9 +114,9 @@ class InteractiveSelftest(Elaboratable, ApolloSelfTestCase):
         #
         # HyperRAM test connections.
         #
-        ram_bus = platform.request('ram')
-        psram_phy = HyperRAMPHY(bus=ram_bus)
-        psram = HyperRAMInterface(phy=psram_phy.phy)
+        ram_bus = platform.request('ram', dir={'cs': '-'})
+        psram_phy = HyperRAMGenericPHY(bus=ram_bus)
+        psram = HyperRAMGenericInterface(phy=psram_phy.phy)
         m.submodules += [psram_phy, psram]
 
         psram_address_changed = Signal()
@@ -259,7 +259,7 @@ class InteractiveSelftest(Elaboratable, ApolloSelfTestCase):
         """ Assertion that fails iff a RAM register doesn't hold the expected value. """
 
         self.dut.registers.register_write(REGISTER_RAM_REG_ADDR, address)
-        actual_value =  self.dut.registers.register_read(REGISTER_RAM_VALUE)
+        actual_value =  self.dut.registers.register_read(REGISTER_RAM_VALUE) >> 16
 
         if actual_value not in expected_values:
             raise AssertionError(f"RAM register {address} was {actual_value}, not one of expected {expected_values}")

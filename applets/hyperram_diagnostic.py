@@ -18,7 +18,7 @@ from amaranth.lib.fifo import SyncFIFO
 from luna                             import top_level_cli
 from apollo_fpga                      import ApolloDebugger
 from luna.gateware.interface.jtag     import JTAGRegisterInterface
-from luna.gateware.interface.psram    import HyperRAMPHY, HyperRAMInterface
+from luna.gateware.interface.psram    import HyperRAMGenericPHY, HyperRAMGenericInterface, HyperRAMDQSInterface, HyperRAMDQSPHY
 
 REGISTER_RAM_REGISTER_SPACE = 1
 REGISTER_RAM_ADDR           = 2
@@ -26,6 +26,7 @@ REGISTER_RAM_READ_LENGTH    = 3
 REGISTER_RAM_FIFO           = 4
 REGISTER_RAM_START          = 5
 
+DQS = True
 
 class HyperRAMDiagnostic(Elaboratable):
     """
@@ -52,9 +53,14 @@ class HyperRAMDiagnostic(Elaboratable):
         #
         # HyperRAM test connections.
         #
-        ram_bus = platform.request('ram', dir={'cs': '-'})
-        psram_phy = HyperRAMPHY(bus=ram_bus)
-        psram = HyperRAMInterface(phy=psram_phy.phy)
+        if DQS:
+            ram_bus = platform.request('ram', dir={'rwds':'-', 'dq':'-', 'cs':'-'})
+            psram_phy = HyperRAMDQSPHY(bus=ram_bus)
+            psram = HyperRAMDQSInterface(phy=psram_phy.phy)
+        else:
+            ram_bus = platform.request('ram', dir={'cs': '-'})
+            psram_phy = HyperRAMGenericPHY(bus=ram_bus)
+            psram = HyperRAMGenericInterface(phy=psram_phy.phy)
         m.submodules += [psram_phy, psram]
 
 
